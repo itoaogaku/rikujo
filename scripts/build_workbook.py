@@ -749,6 +749,67 @@ ws.cell(r + 1, 1, '※人数が少なく多くの項目を同時に調べてい�
 ws.cell(r + 2, 1, '※5000mの組内順位は組ごとに出場選手の強さが違う。2026年はロード5kmで他の年とレースの性格が異なる').font = Font(name=FONT, size=9, color='000000')
 ws.freeze_panes = 'C5'
 
+
+# ---------------- 合宿距離ランキング（全員） ----------------
+ws = wb.create_sheet('合宿距離ランキング_全員')
+title(ws, '夏合宿 走行距離ランキング：全部員（1次・2次・1次+2次、2023〜2026年）',
+      '黄色の背景＝その年の出雲出走メンバー。同じ距離は同順位。1日あたり＝距離÷合宿日数（1次：2023年22日、2024・2025年19日、2026年18日／'
+      '2次：各年10日、2026年チャレンジ組のみ12日）。※＝2次合宿の記録なし（1次のみで合計）。2026年の女子選手（芦田・池野）は除く。出典：各年の走行距離ランキング', 14)
+widths = [5, 12, 7, 7, 2, 5, 12, 7, 7, 2, 5, 12, 8]
+for j, w in enumerate(widths, 1):
+    ws.column_dimensions[get_column_letter(j)].width = w
+YELLOW = PatternFill('solid', fgColor='FFEB9C')
+BOLD = Font(name=FONT, size=10, bold=True, color='000000')
+
+
+def ranked(items):
+    """[(name, value)] を降順に並べ、同値同順位の順位を付ける"""
+    items = sorted(items, key=lambda t: -t[1])
+    return [(1 + sum(1 for _, w in items if w > v), nm, v) for nm, v in items]
+
+
+r = 4
+for y in ['2023', '2024', '2025', '2026']:
+    xs = [x for x in ALL_CD if x['year'] == y]
+    c1 = ranked([(x['name'], float(x['camp1_km'])) for x in xs if x['camp1_km']])
+    c2 = ranked([(x['name'], float(x['camp2_km'])) for x in xs if x['camp2_km']])
+    tot = ranked([(x['name'] + ('' if x['camp2_km'] else '※'),
+                   float(x['camp1_km'] or 0) + float(x['camp2_km'] or 0)) for x in xs])
+    ws.cell(r, 1, f'{y}年（出雲 総合{rank[y]}位）　1次合宿 {CAMP1_PERIOD[y]}（{CAMP1_DAYS[y]}日）／2次合宿 {CAMP2_PERIOD[y]}').font = \
+        Font(name=FONT, bold=True, size=11, color='000000')
+    r += 1
+    hdr = ['順位', '1次合宿', 'km', 'km/日', '', '順位', '2次合宿', 'km', 'km/日', '', '順位', '1次+2次', 'km']
+    for j, h in enumerate(hdr, 1):
+        if h:
+            c = ws.cell(r, j, h)
+            c.font, c.fill, c.alignment, c.border = HEAD_FONT, HEAD_FILL, CENTER, BORDER
+    top = r + 1
+    for i in range(max(len(c1), len(c2), len(tot))):
+        rr = top + i
+        for off, lst, kind in [(0, c1, 1), (5, c2, 2), (10, tot, 0)]:
+            if i >= len(lst):
+                continue
+            rk_, nm, v = lst[i]
+            base = nm.rstrip('※')
+            cells = [put(ws, rr, off + 1, rk_, '0'), put(ws, rr, off + 2, nm), put(ws, rr, off + 3, v, '0.0')]
+            if kind:
+                d = CAMP1_DAYS[y] if kind == 1 else CAMP2_DAYS.get((y, base), 10)
+                cells.append(put(ws, rr, off + 4, f'={get_column_letter(off + 3)}{rr}/{d}', '0.0'))
+            if (y, base) in MEMBERS:
+                for c in cells:
+                    c.fill, c.font = YELLOW, BOLD
+    last = top + max(len(c1), len(c2), len(tot)) - 1
+    rr = last + 1
+    for off, kind in [(0, 1), (5, 2), (10, 0)]:
+        put(ws, rr, off + 2, '平均')
+        col = get_column_letter(off + 3)
+        put(ws, rr, off + 3, f'=AVERAGE({col}{top}:{col}{last})', '0.0')
+        if kind:
+            col4 = get_column_letter(off + 4)
+            put(ws, rr, off + 4, f'=AVERAGE({col4}{top}:{col4}{last})', '0.0')
+    r = rr + 3
+ws.freeze_panes = 'A4'
+
 # ---------------- 概要 ----------------
 ws = wb.create_sheet('概要', 0)
 ws.column_dimensions['A'].width = 24
@@ -767,7 +828,8 @@ sheets = [
     ('合宿距離×区間順位', '1次・2次合宿の距離と区間順位・日本人トップとの差・悪化率を1表に。年平均、相関係数、区間3位以内との比較つき'),
     ('合宿消化率', '出雲メンバーの1〜3次合宿の消化率（2023〜2026年）'),
     ('月間走行距離', '出雲メンバーの月間走行距離（2022・2023年通年、2024年1〜6月）'),
-    ('合宿距離_上位35人', '1次・2次合宿の1日あたり走行距離の上位35人（このシートのみ出雲メンバー以外も含む）'),
+    ('合宿距離_上位35人', '1次・2次合宿の1日あたり走行距離の上位35人（出雲メンバー以外も含む）'),
+    ('合宿距離ランキング_全員', '年度ごとの全部員の走行距離ランキング（1次・2次・1次+2次）。出雲メンバーは黄色'),
     ('チーム平均推移', '夏合宿・月間のチーム平均走行距離の推移と、上位35人・出雲メンバーとの比較'),
     ('区間順位との相関', '区間順位と各項目（5000m、悪化率、合宿距離、消化率、月間距離）の相関一覧'),
     ('合宿メニュー_2023〜2026', '1〜3次合宿のポイント練習と、出雲メンバー6人の組・消化率'),
@@ -784,7 +846,7 @@ terms = [
     ('日本人トップ', '留学生を除いた区間最速の選手（区間賞が留学生だったのは5年とも3区のみ）'),
     ('悪化率', '出雲の5km換算ペース÷2週間前5000m記録−1。大きいほど本番で落ちている'),
     ('チーム比', '出雲メンバー6人の1次合宿距離の平均÷チーム全体の平均'),
-    ('対象', '出雲駅伝に出走した青学の選手（各年6人）のみ。比較用に日本人トップの区間記録、チーム平均距離、「合宿距離_上位35人」シートだけは他の部員も含む'),
+    ('対象', '出雲駅伝に出走した青学の選手（各年6人）のみ。比較用に日本人トップの区間記録、チーム平均距離、「合宿距離_上位35人」「合宿距離ランキング_全員」シートだけは他の部員も含む'),
     ('色の意味', '緑〜赤の背景色は良い〜悪い。区間賞は黄色の背景'),
 ]
 for n, d in terms:
@@ -813,7 +875,7 @@ for d in ['2023〜2025年の5000m記録会の日付', '3次合宿終了から出
     put(ws, r, 2, d, align=LEFT)
 
 ORDER = ['概要', '年別まとめ', '出雲区間記録', '5000m比較', '合宿走行距離', '合宿距離×区間順位', '合宿距離_上位35人',
-         'チーム平均推移', '合宿消化率', '月間走行距離', '区間順位との相関',
+         '合宿距離ランキング_全員', 'チーム平均推移', '合宿消化率', '月間走行距離', '区間順位との相関',
          '合宿メニュー_2023', '合宿メニュー_2024', '合宿メニュー_2025', '合宿メニュー_2026', '選手一覧']
 assert sorted(ORDER) == sorted(s.title for s in wb.worksheets)
 wb._sheets = [wb[t] for t in ORDER]
