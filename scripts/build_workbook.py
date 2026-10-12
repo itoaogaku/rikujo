@@ -8,17 +8,16 @@ from openpyxl.formatting.rule import ColorScaleRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-FONT = 'Arial'
+FONT = 'HGPｺﾞｼｯｸM'
 GREEN = '1E5945'
 LIGHT = 'E8F1EC'
-INPUT_BLUE = '0000FF'
 thin = Side(style='thin', color='BFBFBF')
 BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
-HEAD_FONT = Font(name=FONT, bold=True, color='FFFFFF', size=10)
-HEAD_FILL = PatternFill('solid', fgColor=GREEN)
+HEAD_FONT = Font(name=FONT, bold=True, color='000000', size=10)
+HEAD_FILL = PatternFill('solid', fgColor='A9D08E')
 SUB_FILL = PatternFill('solid', fgColor=LIGHT)
-BASE = Font(name=FONT, size=10)
-BLUE = Font(name=FONT, size=10, color=INPUT_BLUE)
+BASE = Font(name=FONT, size=10, color='000000')
+BLUE = Font(name=FONT, size=10, color='000000')
 CENTER = Alignment(horizontal='center', vertical='center', wrap_text=True)
 LEFT = Alignment(horizontal='left', vertical='center', wrap_text=True)
 
@@ -51,10 +50,10 @@ def rows(path):
 
 def title(ws, text, sub=None, width=10):
     ws['A1'] = text
-    ws['A1'].font = Font(name=FONT, bold=True, size=14, color=GREEN)
+    ws['A1'].font = Font(name=FONT, bold=True, size=14, color='000000')
     if sub:
         ws['A2'] = sub
-        ws['A2'].font = Font(name=FONT, size=9, color='595959')
+        ws['A2'].font = Font(name=FONT, size=9, color='000000')
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=width)
         ws['A2'].alignment = LEFT
         ws.row_dimensions[2].height = 30
@@ -90,6 +89,10 @@ def band(ws, r1, r2, ncol, key_col=1):
                 ws.cell(r, c).fill = SUB_FILL
 
 
+SECTION = {(x['year'], nospace(x['name'])): int(x['section']) for x in rows('data/izumo_vs_pre_race.csv')}
+MEMBERS = set(SECTION)
+PLACE = {(x['year'], nospace(x['name'])): x['place'] for x in rows('data/pre_race_5000m.csv')}
+
 wb = Workbook()
 
 # ---------------- 出雲区間記録 ----------------
@@ -123,7 +126,7 @@ band(ws, 5, IZ_LAST, 13)
 ws.conditional_formatting.add(f'M5:M{IZ_LAST}', ColorScaleRule(
     start_type='num', start_value=0, start_color='FFFFFF', end_type='num', end_value=80, end_color='F8696B'))
 ws.conditional_formatting.add(f'K5:K{IZ_LAST}', FormulaRule(
-    formula=[f'$K5=1'], font=Font(name=FONT, bold=True, color='9C5700'), fill=PatternFill('solid', fgColor='FFEB9C')))
+    formula=[f'$K5=1'], font=Font(name=FONT, bold=True, color='000000'), fill=PatternFill('solid', fgColor='FFEB9C')))
 ws.freeze_panes = 'A5'
 ws.auto_filter.ref = f'A4:M{IZ_LAST}'
 
@@ -131,10 +134,10 @@ ws.auto_filter.ref = f'A4:M{IZ_LAST}'
 ws = wb.create_sheet('5000m比較')
 title(ws, '2週間前の5000m（5km）と出雲の比較：出雲出走メンバー',
       '出雲5km換算＝出雲の実タイム×5÷区間距離（6区も5kmあたりに換算）。悪化率＝出雲5km換算÷2週間前5000m−1。'
-      '2026年はロード5km、他の年はトラック5000m。出典：各年の記録会リザルト、出雲公式リザルト', 11)
+      '2026年はロード5km、他の年はトラック5000m。組内順位は留学生・他大学を含むその組の順位。出典：各年の記録会リザルト、出雲公式リザルト', 12)
 H = ['年', '区間', '選手', '2週間前\n5000m', 'レース種別', '出雲\n実タイム', '区間順位', '区間距離\n(km)', '出雲\n5km換算',
-     '差（秒）', '悪化率']
-header(ws, 4, H, [7, 6, 13, 10, 26, 9, 7, 8, 10, 9, 9])
+     '差（秒）', '悪化率', '5000m\n組内順位']
+header(ws, 4, H, [7, 6, 13, 10, 26, 9, 7, 8, 10, 9, 9, 9])
 vp = rows('data/izumo_vs_pre_race.csv')
 r = 5
 for x in vp:
@@ -150,6 +153,7 @@ for x in vp:
     put(ws, r, 9, f'=F{r}*5/H{r}', '[m]:ss.0')
     put(ws, r, 10, f'=ROUND((I{r}-D{r})*86400,1)', '+0.0;-0.0;0')
     put(ws, r, 11, f'=I{r}/D{r}-1', '+0.0%;-0.0%;0.0%')
+    put(ws, r, 12, int(PLACE[(x['year'], nospace(x['name']))]), '0', BLUE)
     r += 1
 VP_LAST = r - 1
 band(ws, 5, VP_LAST, 11)
@@ -157,37 +161,18 @@ ws.conditional_formatting.add(f'K5:K{VP_LAST}', ColorScaleRule(
     start_type='num', start_value=0, start_color='63BE7B', mid_type='num', mid_value=0.05, mid_color='FFEB84',
     end_type='num', end_value=0.095, end_color='F8696B'))
 ws.freeze_panes = 'A5'
-ws.auto_filter.ref = f'A4:K{VP_LAST}'
-MEMBER = f"COUNTIFS('5000m比較'!$A$5:$A${VP_LAST},{{y}},'5000m比較'!$C$5:$C${VP_LAST},{{n}})>0"
-
-# ---------------- 5000m記録（全部員） ----------------
-ws = wb.create_sheet('5000m記録_全部員')
-title(ws, '出雲2週間前の5000m（5km）記録：青学の全出走部員',
-      '組内順位は留学生・他大学を含むその組の順位。出雲メンバー欄は「5000m比較」シートに同じ年・選手名があれば○', 6)
-header(ws, 4, ['年', '選手', 'タイム', 'レース種別', '組内順位', '出雲\nメンバー'], [7, 13, 10, 26, 8, 8])
-pr = sorted(rows('data/pre_race_5000m.csv'), key=lambda x: (x['year'], tval(x['time_5000m'])))
-r = 5
-for x in pr:
-    put(ws, r, 1, x['year'], font=BLUE)
-    put(ws, r, 2, nospace(x['name']), font=BLUE)
-    put(ws, r, 3, tval(x['time_5000m']), '[m]:ss.00' if '.' in x['time_5000m'] else '[m]:ss', BLUE)
-    put(ws, r, 4, race_label(x['race']), font=BLUE)
-    put(ws, r, 5, int(x['place']), '0', BLUE)
-    put(ws, r, 6, f'=IF({MEMBER.format(y=f"A{r}", n=f"B{r}")},"○","")')
-    r += 1
-band(ws, 5, r - 1, 6)
-ws.freeze_panes = 'A5'
-ws.auto_filter.ref = f'A4:F{r - 1}'
+ws.auto_filter.ref = f'A4:L{VP_LAST}'
+MEMBER = f"SUMIFS('5000m比較'!$B$5:$B${VP_LAST},'5000m比較'!$A$5:$A${VP_LAST},{{y}},'5000m比較'!$C$5:$C${VP_LAST},{{n}})"
 
 # ---------------- 合宿走行距離 ----------------
 ws = wb.create_sheet('合宿走行距離')
-title(ws, '夏合宿 走行距離（1次・2次）：選手別',
-      '1次合宿の期間：2023年 7/26〜8/16（22日）、2024・2025年 8/1〜8/19（19日）、2026年 8/2〜8/19（18日）。'
+title(ws, '夏合宿 走行距離（1次・2次）：出雲メンバー',
+      '出雲出走メンバーのみ。出雲区間＝その年に走った区間。1次合宿の期間：2023年 7/26〜8/16（22日）、2024・2025年 8/1〜8/19（19日）、2026年 8/2〜8/19（18日）。'
       '2次合宿は各年10〜12日。出典：各年の走行距離ランキング（Excel・PDF）', 7)
-header(ws, 4, ['年', '選手', '1次合宿\n(km)', '2次合宿\n(km)', '1次\n日数', '1次\n1日あたり', '出雲\nメンバー'],
+header(ws, 4, ['年', '選手', '1次合宿\n(km)', '2次合宿\n(km)', '1次\n日数', '1次\n1日あたり', '出雲\n区間'],
        [7, 13, 10, 10, 7, 9, 8])
 days = {'2023': 22, '2024': 19, '2025': 19, '2026': 18}
-cd = sorted(rows('data/camp_distance.csv'), key=lambda x: (x['year'], -float(x['camp1_km'] or 0)))
+cd = sorted([x for x in rows('data/camp_distance.csv') if (x['year'], x['name']) in MEMBERS], key=lambda x: (x['year'], SECTION[(x['year'], x['name'])]))
 r = 5
 for x in cd:
     put(ws, r, 1, x['year'], font=BLUE)
@@ -196,21 +181,19 @@ for x in cd:
     put(ws, r, 4, float(x['camp2_km']) if x['camp2_km'] else None, '0.0', BLUE)
     put(ws, r, 5, days[x['year']], '0', BLUE)
     put(ws, r, 6, f'=IF(C{r}="","",C{r}/E{r})', '0.0')
-    put(ws, r, 7, f'=IF({MEMBER.format(y=f"A{r}", n=f"B{r}")},"○","")')
+    put(ws, r, 7, f'={MEMBER.format(y=f"A{r}", n=f"B{r}")}')
     r += 1
 CD_LAST = r - 1
 band(ws, 5, CD_LAST, 7)
-ws.conditional_formatting.add(f'A5:G{CD_LAST}', FormulaRule(
-    formula=['$G5="○"'], font=Font(name=FONT, bold=True, color=GREEN)))
 ws.freeze_panes = 'A5'
 ws.auto_filter.ref = f'A4:G{CD_LAST}'
 
 # ---------------- 合宿消化率 ----------------
 ws = wb.create_sheet('合宿消化率')
-title(ws, '夏合宿 消化率（1〜3次）：選手別',
-      '消化率はポイント練習の実施度（100%＝全メニュー完遂）。出典：各年の合宿消化率（2023・2025年はExcel、2024・2026年はPDF）', 7)
-header(ws, 4, ['年', '選手', '1次合宿', '2次合宿', '3次合宿', '夏合宿\n平均', '出雲\nメンバー'], [7, 13, 9, 9, 9, 9, 8])
-cc = sorted(rows('data/camp_completion.csv'), key=lambda x: (x['year'], -float(x['summer_avg'] or 0)))
+title(ws, '夏合宿 消化率（1〜3次）：出雲メンバー',
+      '出雲出走メンバーのみ。消化率はポイント練習の実施度（100%＝全メニュー完遂）。出典：各年の合宿消化率（2023・2025年はExcel、2024・2026年はPDF）', 7)
+header(ws, 4, ['年', '選手', '1次合宿', '2次合宿', '3次合宿', '夏合宿\n平均', '出雲\n区間'], [7, 13, 9, 9, 9, 9, 8])
+cc = sorted([x for x in rows('data/camp_completion.csv') if (x['year'], x['name']) in MEMBERS], key=lambda x: (x['year'], SECTION[(x['year'], x['name'])]))
 r = 5
 for x in cc:
     put(ws, r, 1, x['year'], font=BLUE)
@@ -218,40 +201,38 @@ for x in cc:
     for j, k in enumerate(['camp1', 'camp2', 'camp3'], 3):
         put(ws, r, j, float(x[k]) if x[k] not in ('', None) else None, '0%', BLUE)
     put(ws, r, 6, f'=IFERROR(AVERAGE(C{r}:E{r}),"")', '0.0%')
-    put(ws, r, 7, f'=IF({MEMBER.format(y=f"A{r}", n=f"B{r}")},"○","")')
+    put(ws, r, 7, f'={MEMBER.format(y=f"A{r}", n=f"B{r}")}')
     r += 1
 CC_LAST = r - 1
 band(ws, 5, CC_LAST, 7)
 ws.conditional_formatting.add(f'C5:F{CC_LAST}', ColorScaleRule(
     start_type='num', start_value=0, start_color='F8696B', mid_type='num', mid_value=0.7, mid_color='FFEB84',
     end_type='num', end_value=1, end_color='63BE7B'))
-ws.conditional_formatting.add(f'A5:B{CC_LAST}', FormulaRule(
-    formula=['$G5="○"'], font=Font(name=FONT, bold=True, color=GREEN)))
 ws.freeze_panes = 'A5'
 ws.auto_filter.ref = f'A4:G{CC_LAST}'
 
 # ---------------- 月間走行距離 ----------------
 ws = wb.create_sheet('月間走行距離')
-title(ws, '月間走行距離：選手別（2022・2023年は通年、2024年は1〜6月のみ）',
-      '出典：月間走行距離Excel。2024年7月以降と2025・2026年はデータ未提供', 16)
-header(ws, 4, ['年', '選手'] + [f'{m}月' for m in range(1, 13)] + ['9月÷8月', '出雲\nメンバー'],
+title(ws, '月間走行距離：出雲メンバー（2022・2023年は通年、2024年は1〜6月のみ）',
+      '出雲出走メンバーのみ。出典：月間走行距離Excel。2024年7月以降と2025・2026年はデータ未提供', 16)
+header(ws, 4, ['年', '選手'] + [f'{m}月' for m in range(1, 13)] + ['9月÷8月', '出雲\n区間'],
        [7, 13] + [7] * 12 + [9, 8])
 md = defaultdict(dict)
 for x in rows('data/monthly_distance.csv'):
+    if (x['year'], x['name']) not in MEMBERS:
+        continue
     md[(x['year'], x['name'])][int(x['month'])] = float(x['km'])
 r = 5
-for (y, n), mv in sorted(md.items()):
+for (y, n), mv in sorted(md.items(), key=lambda kv: (kv[0][0], SECTION[kv[0]])):
     put(ws, r, 1, y, font=BLUE)
     put(ws, r, 2, n, font=BLUE)
     for m in range(1, 13):
         put(ws, r, 2 + m, mv.get(m), '0', BLUE)
     put(ws, r, 15, f'=IF(OR(J{r}="",K{r}="",J{r}=0),"",K{r}/J{r})', '0.00')
-    put(ws, r, 16, f'=IF({MEMBER.format(y=f"A{r}", n=f"B{r}")},"○","")')
+    put(ws, r, 16, f'={MEMBER.format(y=f"A{r}", n=f"B{r}")}')
     r += 1
 MD_LAST = r - 1
 band(ws, 5, MD_LAST, 16)
-ws.conditional_formatting.add(f'A5:B{MD_LAST}', FormulaRule(
-    formula=['$P5="○"'], font=Font(name=FONT, bold=True, color=GREEN)))
 ws.freeze_panes = 'C5'
 ws.auto_filter.ref = f'A4:P{MD_LAST}'
 
@@ -264,7 +245,7 @@ for block in re.split(r'\n## ', md_text)[1:]:
     ws = wb.create_sheet(f'合宿メニュー_{year}')
     title(ws, f'{year}年 夏合宿ポイント練習：出雲メンバー6人の組・消化率')
     for k, n in enumerate(notes, 2):
-        ws.cell(k, 1, '※ ' + n).font = Font(name=FONT, size=9, color='595959')
+        ws.cell(k, 1, '※ ' + n).font = Font(name=FONT, size=9, color='000000')
     r = len(notes) + 3
     ws.cell(r, 1, lines[0] + '　' + next(l for l in lines if l.startswith('メンバー'))).font = Font(name=FONT, bold=True, size=10)
     r += 2
@@ -276,7 +257,7 @@ for block in re.split(r'\n## ', md_text)[1:]:
         l = lines[i]
         if l.startswith('### '):
             c = ws.cell(r, 1, l[4:])
-            c.font = Font(name=FONT, bold=True, size=11, color=GREEN)
+            c.font = Font(name=FONT, bold=True, size=11, color='000000')
             r += 1
         elif l.startswith('|日付'):
             labs = l.strip('|').split('|')
@@ -302,7 +283,7 @@ for block in re.split(r'\n## ', md_text)[1:]:
 # ---------------- 年別まとめ ----------------
 ws = wb.create_sheet('年別まとめ', 0)
 title(ws, '年別まとめ：出雲の成績と、2週間前5000m・合宿データの比較',
-      '青字＝手入力（出典は各セルのコメント）、黒字＝他シートからの集計式。メンバー＝その年の出雲出走6人。'
+      'メンバー＝その年の出雲出走6人。順位・チーム平均・日付は元資料からの入力値（出典は各セルのコメント）、それ以外は他シートからの集計式。'
       '空欄はデータ未提供', 17)
 H = ['年', '出雲\n総合順位', '1〜5区\n平均差\n(秒/5km)', '6区差\n(秒/10km)', 'メンバー\n5000m平均', '悪化率\n平均',
      'メンバー\n1次距離\n(km)', 'チーム\n1次平均\n(km)', '1次距離\nチーム比', 'メンバー\n2次距離\n(km)',
@@ -324,17 +305,17 @@ for k, y in enumerate(YEARS):
     put(ws, r, 4, f'=IFERROR(AVERAGEIFS({IZ}!$M$5:$M${IZ_LAST},{IZ}!$A$5:$A${IZ_LAST},A{r},{IZ}!$B$5:$B${IZ_LAST},6),"")', '+0.0;-0.0;0')
     put(ws, r, 5, f'=IFERROR(AVERAGEIFS({VP}!$D$5:$D${VP_LAST},{VP}!$A$5:$A${VP_LAST},A{r}),"")', '[m]:ss.0')
     put(ws, r, 6, f'=IFERROR(AVERAGEIFS({VP}!$K$5:$K${VP_LAST},{VP}!$A$5:$A${VP_LAST},A{r}),"")', '+0.0%;-0.0%')
-    put(ws, r, 7, f'=IFERROR(AVERAGEIFS({CDs}!$C$5:$C${CD_LAST},{CDs}!$A$5:$A${CD_LAST},A{r},{CDs}!$G$5:$G${CD_LAST},"○"),"")', '0.0')
+    put(ws, r, 7, f'=IFERROR(AVERAGEIFS({CDs}!$C$5:$C${CD_LAST},{CDs}!$A$5:$A${CD_LAST},A{r},{CDs}!$G$5:$G${CD_LAST},">0"),"")', '0.0')
     if y in team1:
         c = put(ws, r, 8, team1[y], '0.0', BLUE)
         c.comment = Comment('出典：各年の1次合宿走行距離ランキングに記載の「チーム平均（全体平均）」', 'analysis')
     else:
         put(ws, r, 8, None)
     put(ws, r, 9, f'=IFERROR(G{r}/H{r},"")', '0%')
-    put(ws, r, 10, f'=IFERROR(AVERAGEIFS({CDs}!$D$5:$D${CD_LAST},{CDs}!$A$5:$A${CD_LAST},A{r},{CDs}!$G$5:$G${CD_LAST},"○"),"")', '0.0')
-    put(ws, r, 11, f'=IFERROR(AVERAGEIFS({CCs}!$F$5:$F${CC_LAST},{CCs}!$A$5:$A${CC_LAST},A{r},{CCs}!$G$5:$G${CC_LAST},"○"),"")', '0.0%')
-    put(ws, r, 12, f'=IFERROR(AVERAGEIFS({MDs}!$J$5:$J${MD_LAST},{MDs}!$A$5:$A${MD_LAST},A{r},{MDs}!$P$5:$P${MD_LAST},"○"),"")', '0')
-    put(ws, r, 13, f'=IFERROR(AVERAGEIFS({MDs}!$K$5:$K${MD_LAST},{MDs}!$A$5:$A${MD_LAST},A{r},{MDs}!$P$5:$P${MD_LAST},"○"),"")', '0')
+    put(ws, r, 10, f'=IFERROR(AVERAGEIFS({CDs}!$D$5:$D${CD_LAST},{CDs}!$A$5:$A${CD_LAST},A{r},{CDs}!$G$5:$G${CD_LAST},">0"),"")', '0.0')
+    put(ws, r, 11, f'=IFERROR(AVERAGEIFS({CCs}!$F$5:$F${CC_LAST},{CCs}!$A$5:$A${CC_LAST},A{r},{CCs}!$G$5:$G${CC_LAST},">0"),"")', '0.0%')
+    put(ws, r, 12, f'=IFERROR(AVERAGEIFS({MDs}!$J$5:$J${MD_LAST},{MDs}!$A$5:$A${MD_LAST},A{r},{MDs}!$P$5:$P${MD_LAST},">0"),"")', '0')
+    put(ws, r, 13, f'=IFERROR(AVERAGEIFS({MDs}!$K$5:$K${MD_LAST},{MDs}!$A$5:$A${MD_LAST},A{r},{MDs}!$P$5:$P${MD_LAST},">0"),"")', '0')
     put(ws, r, 14, f'=IFERROR(M{r}/L{r},"")', '0.00')
     if y in end3:
         c = put(ws, r, 15, dt.date.fromisoformat(end3[y]), 'm/d', BLUE)
@@ -353,7 +334,7 @@ ws.conditional_formatting.add(f'I5:I{YR_LAST}', ColorScaleRule(
 
 # 相関
 r = YR_LAST + 2
-ws.cell(r, 1, '年単位の相関係数（データのある年のみ。年数が少ないため参考値）').font = Font(name=FONT, bold=True, size=11, color=GREEN)
+ws.cell(r, 1, '年単位の相関係数（データのある年のみ。年数が少ないため参考値）').font = Font(name=FONT, bold=True, size=11, color='000000')
 r += 1
 header(ws, r, ['組み合わせ', '', '', '', '対象年', '相関係数'])
 ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
@@ -374,7 +355,7 @@ for lab, a, b, span in pairs:
 
 # 区間別
 r += 2
-ws.cell(r, 1, '区間別の平均（5年間）').font = Font(name=FONT, bold=True, size=11, color=GREEN)
+ws.cell(r, 1, '区間別の平均（5年間）').font = Font(name=FONT, bold=True, size=11, color='000000')
 r += 1
 header(ws, r, ['区間', '距離\n(km)', '日本人\nトップとの\n平均差(秒)', '悪化率\n平均', '区間賞\n回数'])
 for s in range(1, 7):
@@ -384,7 +365,7 @@ for s in range(1, 7):
     put(ws, r, 3, f'=AVERAGEIFS({IZ}!$M$5:$M${IZ_LAST},{IZ}!$B$5:$B${IZ_LAST},A{r})', '+0.0;-0.0;0')
     put(ws, r, 4, f'=AVERAGEIFS({VP}!$K$5:$K${VP_LAST},{VP}!$B$5:$B${VP_LAST},A{r})', '+0.0%;-0.0%')
     put(ws, r, 5, f'=COUNTIFS({IZ}!$B$5:$B${IZ_LAST},A{r},{IZ}!$K$5:$K${IZ_LAST},1)', '0')
-ws.cell(r + 1, 1, '※6区の平均差は10kmあたり。悪化率は全区間とも5kmあたりで比較').font = Font(name=FONT, size=9, color='595959')
+ws.cell(r + 1, 1, '※6区の平均差は10kmあたり。悪化率は全区間とも5kmあたりで比較').font = Font(name=FONT, size=9, color='000000')
 ws.freeze_panes = 'B5'
 
 # ---------------- 概要 ----------------
@@ -392,19 +373,18 @@ ws = wb.create_sheet('概要', 0)
 ws.column_dimensions['A'].width = 24
 ws.column_dimensions['B'].width = 100
 ws['A1'] = '出雲駅伝 振り返り分析（2022〜2026年）'
-ws['A1'].font = Font(name=FONT, bold=True, size=16, color=GREEN)
+ws['A1'].font = Font(name=FONT, bold=True, size=16, color='000000')
 ws['A2'] = '目的：近年ピーキングが合わず順位が伸びない原因を、2週間前の5000mと夏合宿のデータから探る'
 ws['A2'].font = Font(name=FONT, size=10)
 r = 4
-ws.cell(r, 1, 'シート一覧').font = Font(name=FONT, bold=True, size=12, color=GREEN)
+ws.cell(r, 1, 'シート一覧').font = Font(name=FONT, bold=True, size=12, color='000000')
 sheets = [
     ('年別まとめ', '年ごとの総合順位・区間差・悪化率・合宿の負荷を1表に集約。相関係数と区間別平均つき'),
     ('出雲区間記録', '各区間の日本人トップと青学選手のタイム、5km（6区は10km）換算と差'),
-    ('5000m比較', '出雲メンバーの2週間前5000m（5km）と出雲5km換算ペース、悪化率'),
-    ('5000m記録_全部員', '2週間前の5000m（5km）に出走した青学部員全員の記録'),
-    ('合宿走行距離', '1次・2次合宿の選手別走行距離（2023〜2026年）'),
-    ('合宿消化率', '1〜3次合宿の選手別消化率（2023〜2026年）'),
-    ('月間走行距離', '選手別の月間走行距離（2022・2023年通年、2024年1〜6月）'),
+    ('5000m比較', '出雲メンバーの2週間前5000m（5km）と組内順位、出雲5km換算ペース、悪化率'),
+    ('合宿走行距離', '出雲メンバーの1次・2次合宿の距離（2023〜2026年）'),
+    ('合宿消化率', '出雲メンバーの1〜3次合宿の消化率（2023〜2026年）'),
+    ('月間走行距離', '出雲メンバーの月間走行距離（2022・2023年通年、2024年1〜6月）'),
     ('合宿メニュー_2023〜2026', '1〜3次合宿のポイント練習と、出雲メンバー6人の組・消化率'),
 ]
 for n, d in sheets:
@@ -412,20 +392,21 @@ for n, d in sheets:
     put(ws, r, 1, n, align=LEFT).font = Font(name=FONT, bold=True, size=10)
     put(ws, r, 2, d, align=LEFT)
 r += 2
-ws.cell(r, 1, '用語と計算方法').font = Font(name=FONT, bold=True, size=12, color=GREEN)
+ws.cell(r, 1, '用語と計算方法').font = Font(name=FONT, bold=True, size=12, color='000000')
 terms = [
     ('換算タイム', '実タイム×換算距離÷区間距離。1〜5区は5km、6区は10kmあたり'),
     ('日本人トップ', '留学生を除いた区間最速の選手（区間賞が留学生だったのは5年とも3区のみ）'),
     ('悪化率', '出雲の5km換算ペース÷2週間前5000m記録−1。大きいほど本番で落ちている'),
     ('チーム比', '出雲メンバー6人の1次合宿距離の平均÷チーム全体の平均'),
-    ('色の意味', '青字＝元資料から入力した値、黒字＝計算式。緑〜赤の色は良い〜悪い'),
+    ('対象', '出雲駅伝に出走した青学の選手（各年6人）のみ。比較用に日本人トップの区間記録と、1次合宿のチーム平均距離（年別まとめ）だけは参考値として掲載'),
+    ('色の意味', '緑〜赤の背景色は良い〜悪い。区間賞は黄色の背景'),
 ]
 for n, d in terms:
     r += 1
     put(ws, r, 1, n, align=LEFT).font = Font(name=FONT, bold=True, size=10)
     put(ws, r, 2, d, align=LEFT)
 r += 2
-ws.cell(r, 1, 'これまでの分析で見えたこと（仮説）').font = Font(name=FONT, bold=True, size=12, color=GREEN)
+ws.cell(r, 1, 'これまでの分析で見えたこと（仮説）').font = Font(name=FONT, bold=True, size=12, color='000000')
 finds = [
     '2週間前の5000mが速い年ほど出雲での悪化率が大きい（年単位で強い負の相関）。個人単位では関係がほぼない',
     '総合3位の2024年だけ、出雲メンバーの1次合宿距離がチーム平均を下回った（93%）。他の年は113〜121%',
@@ -438,7 +419,7 @@ for d in finds:
     put(ws, r, 1, '・', align=CENTER)
     put(ws, r, 2, d, align=LEFT)
 r += 2
-ws.cell(r, 1, '未提供のデータ').font = Font(name=FONT, bold=True, size=12, color=GREEN)
+ws.cell(r, 1, '未提供のデータ').font = Font(name=FONT, bold=True, size=12, color='000000')
 for d in ['2023〜2025年の5000m記録会の日付', '3次合宿終了から出雲までの練習内容（2024〜2026年、2023年の9/18〜9/29）',
           '2024年7〜10月、2025・2026年の月間走行距離', '2022年の合宿データ（走行距離・消化率・3次合宿日程）']:
     r += 1
