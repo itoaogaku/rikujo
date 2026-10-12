@@ -93,6 +93,8 @@ SECTION = {(x['year'], nospace(x['name'])): int(x['section']) for x in rows('dat
 MEMBERS = set(SECTION)
 PLACE = {(x['year'], nospace(x['name'])): x['place'] for x in rows('data/pre_race_5000m.csv')}
 
+rank = {'2022': 4, '2023': 4, '2024': 3, '2025': 7, '2026': 11}
+
 wb = Workbook()
 
 # ---------------- 出雲区間記録 ----------------
@@ -187,6 +189,83 @@ CD_LAST = r - 1
 band(ws, 5, CD_LAST, 7)
 ws.freeze_panes = 'A5'
 ws.auto_filter.ref = f'A4:G{CD_LAST}'
+
+# ---------------- 合宿距離×区間順位 ----------------
+ws = wb.create_sheet('合宿距離×区間順位')
+title(ws, '夏合宿の走行距離と出雲の区間順位：出雲メンバー（2023〜2026）',
+      '値はすべて「合宿走行距離」「5000m比較」「出雲区間記録」シートからの参照式。区間順位は留学生を含む公式記録。'
+      '日本人トップとの差は1〜5区が5kmあたり、6区が10kmあたりの秒差。悪化率＝出雲5km換算÷2週間前5000m−1', 10)
+header(ws, 4, ['年', '区間', '選手', '区間順位', '1次合宿\n(km)', '1次\n1日あたり\n(km)', '2次合宿\n(km)',
+               '1次+2次\n合計(km)', '日本人トップ\nとの差(秒)', '悪化率'], [7, 6, 13, 8, 9, 9, 9, 9, 11, 9])
+CDn, VPn, IZn = "'合宿走行距離'", "'5000m比較'", "'出雲区間記録'"
+crit = lambda sh, last, r: f"{sh}!$A$5:$A${last},$A{r},{sh}!${'B' if sh == CDn else 'C'}$5:${'B' if sh == CDn else 'C'}${last},$C{r}"
+r = 5
+for y in ['2023', '2024', '2025', '2026']:
+    for (yy, name), sec in sorted(SECTION.items(), key=lambda kv: kv[1]):
+        if yy != y:
+            continue
+        put(ws, r, 1, y, font=BLUE)
+        put(ws, r, 2, sec, '0', BLUE)
+        put(ws, r, 3, name, font=BLUE)
+        put(ws, r, 4, f"=SUMIFS({VPn}!$G$5:$G${VP_LAST},{crit(VPn, VP_LAST, r)})", '0')
+        put(ws, r, 5, f"=SUMIFS({CDn}!$C$5:$C${CD_LAST},{crit(CDn, CD_LAST, r)})", '0.0')
+        put(ws, r, 6, f"=SUMIFS({CDn}!$F$5:$F${CD_LAST},{crit(CDn, CD_LAST, r)})", '0.0')
+        put(ws, r, 7, f"=SUMIFS({CDn}!$D$5:$D${CD_LAST},{crit(CDn, CD_LAST, r)})", '0.0')
+        put(ws, r, 8, f'=E{r}+G{r}', '0.0')
+        put(ws, r, 9, f"=SUMIFS({IZn}!$M$5:$M${IZ_LAST},{IZn}!$A$5:$A${IZ_LAST},$A{r},{IZn}!$B$5:$B${IZ_LAST},$B{r})", '+0.0;-0.0;0')
+        put(ws, r, 10, f"=SUMIFS({VPn}!$K$5:$K${VP_LAST},{crit(VPn, VP_LAST, r)})", '+0.0%;-0.0%;0.0%')
+        r += 1
+DR_LAST = r - 1
+band(ws, 5, DR_LAST, 10)
+ws.conditional_formatting.add(f'D5:D{DR_LAST}', FormulaRule(
+    formula=['$D5=1'], font=Font(name=FONT, bold=True, color='000000'), fill=PatternFill('solid', fgColor='FFEB9C')))
+ws.conditional_formatting.add(f'F5:F{DR_LAST}', ColorScaleRule(
+    start_type='min', start_color='63BE7B', mid_type='percentile', mid_value=50, mid_color='FFEB84',
+    end_type='max', end_color='F8696B'))
+ws.freeze_panes = 'D5'
+ws.auto_filter.ref = f'A4:J{DR_LAST}'
+
+r = DR_LAST + 2
+ws.cell(r, 1, '年ごとの6人平均').font = Font(name=FONT, bold=True, size=11, color='000000')
+r += 1
+header(ws, r, ['年', '出雲\n総合順位', '', '区間順位\n平均', '1次合宿\n(km)', '1次\n1日あたり\n(km)', '2次合宿\n(km)',
+               '1次+2次\n合計(km)', '日本人トップ\nとの差(秒)', '悪化率'])
+for y in ['2023', '2024', '2025', '2026']:
+    r += 1
+    put(ws, r, 1, y, font=BLUE)
+    put(ws, r, 2, rank[y], '0', BLUE)
+    put(ws, r, 3, None)
+    for col, fmt in zip('DEFGHIJ', ['0.0', '0.0', '0.0', '0.0', '0.0', '+0.0;-0.0;0', '+0.0%;-0.0%']):
+        put(ws, r, ' ABCDEFGHIJ'.index(col),
+            f'=AVERAGEIFS(${col}$5:${col}${DR_LAST},$A$5:$A${DR_LAST},$A{r})', fmt)
+
+r += 2
+ws.cell(r, 1, '区間順位との相関係数（延べ24人）').font = Font(name=FONT, bold=True, size=11, color='000000')
+r += 1
+header(ws, r, ['指標', '', '', '', '相関係数'])
+ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+for lab, col in [('1次合宿の距離', 'E'), ('1次合宿の1日あたり距離', 'F'), ('2次合宿の距離', 'G'),
+                 ('1次+2次の合計', 'H'), ('悪化率', 'J')]:
+    r += 1
+    for j in range(1, 5):
+        put(ws, r, j, lab if j == 1 else None, align=LEFT)
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+    put(ws, r, 5, f'=CORREL({col}5:{col}{DR_LAST},D5:D{DR_LAST})', '0.00')
+ws.cell(r + 1, 1, '※正の値＝その指標が大きい選手ほど区間順位が悪い。2026年は順位・距離ともに全体が高く、年の影響が混ざっている点に注意').font = Font(name=FONT, size=9, color='000000')
+
+r += 3
+ws.cell(r, 1, '区間3位以内とそれ以外の比較').font = Font(name=FONT, bold=True, size=11, color='000000')
+r += 1
+header(ws, r, ['区分', '', '', '人数', '1次合宿\n(km)', '1次\n1日あたり\n(km)', '2次合宿\n(km)', '1次+2次\n合計(km)'])
+ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+for lab, cond in [('区間1〜3位', '"<=3"'), ('区間4位以下', '">3"')]:
+    r += 1
+    for j in range(1, 4):
+        put(ws, r, j, lab if j == 1 else None)
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+    put(ws, r, 4, f'=COUNTIFS($D$5:$D${DR_LAST},{cond})', '0')
+    for col in 'EFGH':
+        put(ws, r, ' ABCDEFGH'.index(col), f'=AVERAGEIFS({col}$5:{col}${DR_LAST},$D$5:$D${DR_LAST},{cond})', '0.0')
 
 # ---------------- 合宿消化率 ----------------
 ws = wb.create_sheet('合宿消化率')
@@ -290,7 +369,6 @@ H = ['年', '出雲\n総合順位', '1〜5区\n平均差\n(秒/5km)', '6区差\n
      'メンバー\n夏消化率', 'メンバー\n8月月間\n(km)', 'メンバー\n9月月間\n(km)', '9月÷8月', '3次合宿\n最終日', '出雲\n開催日',
      '3次終了→\n出雲(日)']
 header(ws, 4, H, [7, 8, 9, 9, 10, 8, 9, 9, 9, 9, 9, 9, 9, 8, 10, 10, 9])
-rank = {'2022': 4, '2023': 4, '2024': 3, '2025': 7, '2026': 11}
 team1 = {'2023': 507.9, '2024': 510.6, '2025': 481, '2026': 460}
 end3 = {'2023': '2023-09-17', '2024': '2024-09-21', '2025': '2025-09-20', '2026': '2026-09-23'}
 izdate = {'2022': '2022-10-10', '2023': '2023-10-09', '2024': '2024-10-14', '2025': '2025-10-13', '2026': '2026-10-12'}
@@ -383,6 +461,7 @@ sheets = [
     ('出雲区間記録', '各区間の日本人トップと青学選手のタイム、5km（6区は10km）換算と差'),
     ('5000m比較', '出雲メンバーの2週間前5000m（5km）と組内順位、出雲5km換算ペース、悪化率'),
     ('合宿走行距離', '出雲メンバーの1次・2次合宿の距離（2023〜2026年）'),
+    ('合宿距離×区間順位', '1次・2次合宿の距離と区間順位・日本人トップとの差・悪化率を1表に。年平均、相関係数、区間3位以内との比較つき'),
     ('合宿消化率', '出雲メンバーの1〜3次合宿の消化率（2023〜2026年）'),
     ('月間走行距離', '出雲メンバーの月間走行距離（2022・2023年通年、2024年1〜6月）'),
     ('合宿メニュー_2023〜2026', '1〜3次合宿のポイント練習と、出雲メンバー6人の組・消化率'),
