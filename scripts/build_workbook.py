@@ -446,6 +446,309 @@ for s in range(1, 7):
 ws.cell(r + 1, 1, '※6区の平均差は10kmあたり。悪化率は全区間とも5kmあたりで比較').font = Font(name=FONT, size=9, color='000000')
 ws.freeze_panes = 'B5'
 
+# ---------------- 追加分析用の集計（Python側） ----------------
+import math
+import statistics as stt
+
+WOMEN = {'芦田和佳', '池野絵莉'}
+CAMP1_DAYS = {'2023': 22, '2024': 19, '2025': 19, '2026': 18}
+CAMP1_PERIOD = {'2023': '7/26〜8/16', '2024': '8/1〜8/19', '2025': '8/1〜8/19', '2026': '8/2〜8/19'}
+CAMP2_PERIOD = {'2023': '8/25〜9/3', '2024': '8/27〜9/5', '2025': '8/26〜9/4', '2026': '選抜8/27〜9/5・チャレンジ8/26〜9/6'}
+CAMP2_DAYS = {(x['year'], x['name']): int(x['camp2_days']) for x in rows('data/camp2_group.csv')}
+ALL_CD = [x for x in rows('data/camp_distance.csv') if x['name'] not in WOMEN]
+
+
+def per_day(x, camp):
+    v = x['camp1_km'] if camp == 1 else x['camp2_km']
+    if not v:
+        return None
+    d = CAMP1_DAYS[x['year']] if camp == 1 else CAMP2_DAYS.get((x['year'], x['name']), 10)
+    return float(v) / d
+
+
+TEAM_RANK = {}   # (year, name, camp) -> (チーム内順位, 人数)
+TOP35 = {}       # (year, camp) -> [(name, km/日)]
+for y in CAMP1_DAYS:
+    for camp in (1, 2):
+        lst = sorted([(x['name'], per_day(x, camp)) for x in ALL_CD if x['year'] == y and per_day(x, camp) is not None],
+                     key=lambda t: -t[1])
+        TOP35[(y, camp)] = lst[:35]
+        for i, (nm, v) in enumerate(lst):
+            # 同値は同順位
+            TEAM_RANK[(y, nm, camp)] = (1 + sum(1 for _, w in lst if w > v), len(lst))
+
+
+def secs(t):
+    return tval(t) * 86400
+
+
+# 選手ごとの情報をまとめる
+izs = {(x['year'], int(x['section'])): x for x in rows('data/izumo_sections.csv')}
+pre_all = {(x['year'], nospace(x['name'])): x for x in rows('data/pre_race_5000m.csv')}
+cdm = {(x['year'], x['name']): x for x in rows('data/camp_distance.csv')}
+ccm = {(x['year'], x['name']): x for x in rows('data/camp_completion.csv')}
+mdm = defaultdict(dict)
+for x in rows('data/monthly_distance.csv'):
+    mdm[(x['year'], x['name'])][int(x['month'])] = float(x['km'])
+PEOPLE = []
+for x in sorted(rows('data/izumo_vs_pre_race.csv'), key=lambda x: (x['year'], int(x['section']))):
+    y, s, nm = x['year'], int(x['section']), nospace(x['name'])
+    iz = izs[(y, s)]
+    km = float(iz['distance_km'])
+    base = 10 if s == 6 else 5
+    p = dict(year=y, sec=s, name=nm, team_rank=rank[y], km=km,
+             time=tval(iz['aogaku_time']), rank=int(iz['aogaku_rank']),
+             conv=tval(iz['aogaku_time']) * base / km, top_conv=tval(iz['winner_time']) * base / km,
+             top_name=nospace(iz['winner_name']),
+             pre=tval(x['pre_5000m']), pre_dec='.' in x['pre_5000m'], race=race_label(x['pre_race']),
+             place=int(pre_all[(y, nm)]['place']), pace5=tval(x['izumo_time']) * 5 / km)
+    p['gap'] = round((p['conv'] - p['top_conv']) * 86400, 1)
+    p['drop'] = p['pace5'] / p['pre'] - 1
+    if (y, nm) in cdm:
+        c = cdm[(y, nm)]
+        p['c1'], p['c2'] = float(c['camp1_km']), float(c['camp2_km'])
+        p['c1d'], p['c2d'] = per_day(c, 1), per_day(c, 2)
+        p['c1r'], p['n1'] = TEAM_RANK[(y, nm, 1)]
+        p['c2r'], p['n2'] = TEAM_RANK[(y, nm, 2)]
+    if (y, nm) in ccm:
+        c = ccm[(y, nm)]
+        for k in ('camp1', 'camp2', 'camp3', 'summer_avg'):
+            p['comp_' + k] = float(c[k]) if c[k] != '' else None
+    if (y, nm) in mdm and 8 in mdm[(y, nm)]:
+        m = mdm[(y, nm)]
+        p['jul'], p['aug'], p['sep'] = m.get(7), m.get(8), m.get(9)
+    PEOPLE.append(p)
+
+
+def pval(r, n):
+    """相関係数の両側p値（t分布）"""
+    if n <= 2 or abs(r) >= 1:
+        return 0.0
+    df = n - 2
+    t = abs(r) * math.sqrt(df / (1 - r * r))
+    x = df / (df + t * t)
+    a, b = df / 2, 0.5
+
+    def cf(a, b, x):
+        qab, qap, qam, c, d = a + b, a + 1, a - 1, 1.0, 1 - (a + b) * x / (a + 1)
+        d = 1 / (d or 1e-300)
+        h = d
+        for m in range(1, 300):
+            m2 = 2 * m
+            aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+            d = 1 / ((1 + aa * d) or 1e-300); c = 1 + aa / c; h *= d * c
+            aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+            d = 1 / ((1 + aa * d) or 1e-300); c = 1 + aa / c; h *= d * c
+            if abs(d * c - 1) < 3e-14:
+                break
+        return h
+    bt = math.exp(math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log(1 - x))
+    return bt * cf(a, b, x) / a if x < (a + 1) / (a + b + 2) else 1 - bt * cf(b, a, 1 - x) / b
+
+
+def year_adjusted_r(key):
+    rs = [p for p in PEOPLE if p.get(key) is not None]
+    xa, ra = [], []
+    for p in rs:
+        g = [q for q in rs if q['year'] == p['year']]
+        xa.append(p[key] - stt.mean(q[key] for q in g))
+        ra.append(p['rank'] - stt.mean(q['rank'] for q in g))
+    return stt.correlation(xa, ra), len(rs), len({p['year'] for p in rs})
+
+
+# ---------------- チーム平均推移 ----------------
+ws = wb.create_sheet('チーム平均推移')
+title(ws, 'チーム平均の走行距離の推移（夏合宿・月間）',
+      '合宿のチーム平均・選抜組／チャレンジ組平均と月間のチーム平均は、元資料に記載の値（出典：各年の走行距離ランキング、月間走行距離Excel）。'
+      '上位35人平均は全部員の選手別データから算出（2026年は女子選手を除く）。1日あたり＝距離÷合宿日数', 12)
+header(ws, 4, ['年', '出雲\n総合順位', '1次合宿\n期間', '1次\n日数', '1次\nチーム平均\n(km)', '1次\nチーム平均\n1日あたり',
+               '1次\n上位35人\n1日あたり', '1次\n出雲メンバー\n1日あたり', 'メンバーの\nチーム比\n(1日あたり)',
+               '2次\nチーム全体\n平均(km)', '2次\n選抜組\n平均(km)', '2次\nチャレンジ組\n平均(km)'],
+       [7, 8, 12, 6, 10, 10, 10, 11, 10, 10, 10, 11])
+team2 = {'2023': (228.3, 226.0, 226.1), '2024': (217.7, 214.0, 223.6), '2025': (216.4, 222.4, 204.8),
+         '2026': (None, 226.4, 213.2)}
+r = 5
+for y in ['2023', '2024', '2025', '2026']:
+    put(ws, r, 1, y)
+    put(ws, r, 2, rank[y], '0')
+    put(ws, r, 3, CAMP1_PERIOD[y])
+    put(ws, r, 4, CAMP1_DAYS[y], '0')
+    put(ws, r, 5, team1[y], '0.0')
+    put(ws, r, 6, f'=E{r}/D{r}', '0.0')
+    put(ws, r, 7, round(stt.mean(v for _, v in TOP35[(y, 1)]), 2), '0.0')
+    put(ws, r, 8, f"=AVERAGEIFS('合宿走行距離'!$F$5:$F${CD_LAST},'合宿走行距離'!$A$5:$A${CD_LAST},A{r})", '0.0')
+    put(ws, r, 9, f'=H{r}/F{r}', '0%')
+    for j, v in enumerate(team2[y], 10):
+        put(ws, r, j, v, '0.0')
+    r += 1
+ws.conditional_formatting.add('I5:I8', ColorScaleRule(start_type='min', start_color='63BE7B', end_type='max', end_color='F8696B'))
+r += 1
+ws.cell(r, 1, '月間走行距離のチーム平均（km）').font = Font(name=FONT, bold=True, size=11, color='000000')
+r += 1
+header(ws, r, ['年'] + [f'{m}月' for m in range(1, 13)])
+monthly_team = {'2022': [282, 307, 353, 303, 323, 332, 326, 599, 346, 425, 345, 408],
+                '2023': [315, 344, 366, 313, 387, 365, 389, 586, 449, 414, 345, None],
+                '2024': [263, 318, 399, 272, 340, 397] + [None] * 6}
+for y, vals in monthly_team.items():
+    r += 1
+    put(ws, r, 1, y)
+    for j, v in enumerate(vals, 2):
+        put(ws, r, j, v, '0')
+ws.cell(r + 1, 1, '※2023年12月、2024年7月以降、2025・2026年は未提供').font = Font(name=FONT, size=9, color='000000')
+ws.freeze_panes = 'B5'
+
+# ---------------- 合宿距離_上位35人 ----------------
+ws = wb.create_sheet('合宿距離_上位35人')
+title(ws, '夏合宿 1日あたり走行距離 上位35人（2023〜2026）',
+      'このシートのみ出雲メンバー以外の部員も含む（全部員の中での位置を見るため）。黄色の背景＝その年の出雲出走メンバー。'
+      '1日あたり＝合宿距離÷日数（1次：2023年22日、2024・2025年19日、2026年18日／2次：各年10日、2026年チャレンジ組のみ12日）。2026年は女子選手を除く', 13)
+widths = [6] + [12, 8, 2] * 4
+for camp, label, periods in [(1, '1次合宿', CAMP1_PERIOD), (2, '2次合宿', CAMP2_PERIOD)]:
+    start = 4 if camp == 1 else 4 + 35 + 5
+    ws.cell(start, 1, f'{label}（km/日）').font = Font(name=FONT, bold=True, size=11, color='000000')
+    labs = ['順位']
+    for y in ['2023', '2024', '2025', '2026']:
+        labs += [f'{y}\n{periods[y]}', 'km/日', '']
+    header(ws, start + 1, labs[:-1], widths if camp == 1 else None)
+    for j in range(4, 13, 3):
+        ws.cell(start + 1, j).fill = PatternFill(fill_type=None)
+        ws.cell(start + 1, j).border = Border()
+    for i in range(35):
+        rr = start + 2 + i
+        put(ws, rr, 1, i + 1, '0')
+        for k, y in enumerate(['2023', '2024', '2025', '2026']):
+            nm, v = TOP35[(y, camp)][i]
+            c1 = put(ws, rr, 2 + 3 * k, nm)
+            c2 = put(ws, rr, 3 + 3 * k, round(v, 2), '0.0')
+            if (y, nm) in MEMBERS:
+                for c in (c1, c2):
+                    c.fill = PatternFill('solid', fgColor='FFEB9C')
+                    c.font = Font(name=FONT, size=10, bold=True, color='000000')
+    rr = start + 37
+    put(ws, rr, 1, '平均')
+    for k in range(4):
+        col = get_column_letter(3 + 3 * k)
+        put(ws, rr, 3 + 3 * k, f'=AVERAGE({col}{start + 2}:{col}{start + 36})', '0.0')
+ws.freeze_panes = 'B6'
+
+# ---------------- 区間順位との相関 ----------------
+CORR_ITEMS = [
+    ('pre', '2週間前5000mのタイム'), ('place', '2週間前5000mの組内順位'), ('drop', '悪化率'), ('sec', '区間（何区か）'),
+    ('c1', '1次合宿の距離'), ('c1d', '1次合宿の1日あたり距離'), ('c2', '2次合宿の距離'), ('c12', '1次+2次の合計'),
+    ('comp_camp1', '1次合宿の消化率'), ('comp_camp2', '2次合宿の消化率'), ('comp_camp3', '3次合宿の消化率'),
+    ('comp_summer_avg', '夏合宿の消化率（平均）'), ('jul', '7月の月間走行距離'), ('aug', '8月の月間走行距離'),
+    ('sep', '9月の月間走行距離'), ('sa', '9月÷8月'),
+]
+for p in PEOPLE:
+    p['sec_'] = p['sec']
+    if 'c1' in p:
+        p['c12'] = p['c1'] + p['c2']
+    if p.get('aug'):
+        p['sa'] = p['sep'] / p['aug']
+PEOPLE_SEC = {'sec': 'sec_'}
+
+# ---------------- 選手一覧（最後のシート） ----------------
+TIME, TIME2 = '[m]:ss', '[m]:ss.00'
+COLS = [  # (グループ, 見出し, キー, 書式, 幅)
+    ('基本', '年', 'year', None, 6), ('基本', '区間', 'sec', '0', 5), ('基本', '選手', 'name', None, 12),
+    ('基本', '出雲\n総合順位', 'team_rank', '0', 7),
+    ('出雲駅伝', '区間距離\n(km)', 'km', '0.0', 7), ('出雲駅伝', '実タイム', 'time', TIME, 8),
+    ('出雲駅伝', '区間順位', 'rank', '0', 7), ('出雲駅伝', '換算タイム\n(5km/6区10km)', 'conv', TIME, 10),
+    ('出雲駅伝', '日本人トップ\n換算タイム', 'top_conv', TIME, 10), ('出雲駅伝', '日本人トップ\nとの差(秒)', 'gap', '+0.0;-0.0;0', 10),
+    ('2週間前5000m', 'タイム', 'pre', None, 9), ('2週間前5000m', 'レース', 'race', None, 27),
+    ('2週間前5000m', '組内順位', 'place', '0', 7), ('2週間前5000m', '出雲\n5km換算', 'pace5', '[m]:ss.0', 9),
+    ('2週間前5000m', '悪化率', 'drop', '+0.0%;-0.0%;0.0%', 8),
+    ('合宿走行距離', '1次\n(km)', 'c1', '0.0', 7), ('合宿走行距離', '1次\n1日あたり', 'c1d', '0.0', 8),
+    ('合宿走行距離', '1次\nチーム内\n順位(1日)', 'c1r_txt', None, 9), ('合宿走行距離', '2次\n(km)', 'c2', '0.0', 7),
+    ('合宿走行距離', '2次\n1日あたり', 'c2d', '0.0', 8), ('合宿走行距離', '2次\nチーム内\n順位(1日)', 'c2r_txt', None, 9),
+    ('合宿走行距離', '1次+2次\n(km)', 'c12', '0.0', 8),
+    ('合宿消化率', '1次', 'comp_camp1', '0%', 6), ('合宿消化率', '2次', 'comp_camp2', '0%', 6),
+    ('合宿消化率', '3次', 'comp_camp3', '0%', 6), ('合宿消化率', '夏平均', 'comp_summer_avg', '0.0%', 7),
+    ('月間走行距離', '7月', 'jul', '0', 6), ('月間走行距離', '8月', 'aug', '0', 6), ('月間走行距離', '9月', 'sep', '0', 6),
+    ('月間走行距離', '9月÷8月', 'sa', '0.00', 7),
+]
+COL_OF = {k: get_column_letter(i) for i, (_, _, k, _, _) in enumerate(COLS, 1)}
+for p in PEOPLE:
+    if 'c1r' in p:
+        p['c1r_txt'] = f"{p['c1r']}位/{p['n1']}人"
+        p['c2r_txt'] = f"{p['c2r']}位/{p['n2']}人"
+
+ws = wb.create_sheet('選手一覧')
+title(ws, '出雲駅伝 出走選手一覧（2022〜2026年）：1行に1人分の情報を集約',
+      '各テーマのシートの値を1行に集めた一覧（値で記載）。換算タイムは1〜5区が5km、6区が10kmあたり。悪化率＝出雲5km換算÷2週間前5000m−1。'
+      'チーム内順位は全部員（女子選手を除く）の中での1日あたり距離の順位。空欄はデータ未提供（2022年の合宿、2024年以降の月間など）', 20)
+# グループ見出し（4行目）と項目見出し（5行目）
+groups = []
+for i, (g, *_rest) in enumerate(COLS, 1):
+    if groups and groups[-1][0] == g:
+        groups[-1][2] = i
+    else:
+        groups.append([g, i, i])
+for g, a, b in groups:
+    c = ws.cell(4, a, g)
+    c.font, c.fill, c.alignment = HEAD_FONT, PatternFill('solid', fgColor='C6E0B4'), CENTER
+    for j in range(a, b + 1):
+        ws.cell(4, j).border = BORDER
+        ws.cell(4, j).fill = PatternFill('solid', fgColor='C6E0B4')
+    if b > a:
+        ws.merge_cells(start_row=4, start_column=a, end_row=4, end_column=b)
+header(ws, 5, [h for _, h, _, _, _ in COLS], [w for *_, w in COLS])
+r = 6
+for p in PEOPLE:
+    for j, (g, h, k, fmt, w) in enumerate(COLS, 1):
+        v = p.get(k)
+        if k == 'pre':
+            fmt = TIME2 if p['pre_dec'] else TIME
+        put(ws, r, j, v, fmt, align=LEFT if k == 'race' else CENTER)
+    r += 1
+LIST_LAST = r - 1
+band(ws, 6, LIST_LAST, len(COLS))
+ws.conditional_formatting.add(f"{COL_OF['rank']}6:{COL_OF['rank']}{LIST_LAST}", FormulaRule(
+    formula=[f"${COL_OF['rank']}6=1"], font=Font(name=FONT, bold=True, color='000000'), fill=PatternFill('solid', fgColor='FFEB9C')))
+for k, lo_good in [('drop', True), ('gap', True), ('c1d', True)]:
+    col = COL_OF[k]
+    ws.conditional_formatting.add(f'{col}6:{col}{LIST_LAST}', ColorScaleRule(
+        start_type='min', start_color='63BE7B', mid_type='percentile', mid_value=50, mid_color='FFEB84',
+        end_type='max', end_color='F8696B'))
+ws.freeze_panes = 'D6'
+ws.auto_filter.ref = f'A5:{get_column_letter(len(COLS))}{LIST_LAST}'
+
+# ---------------- 区間順位との相関 ----------------
+ws = wb.create_sheet('区間順位との相関')
+title(ws, '区間順位と各項目の相関（出雲メンバー延べ12〜30人）',
+      '相関係数は「選手一覧」シートからCORREL関数で計算（空欄の選手は除外）。正の値＝その値が大きい選手ほど区間順位が悪い。'
+      '年の影響を除いた相関＝各年の6人の平均との差どうしで計算した値。偶然の可能性＝相関が偶然に生じる確率（両側p値）。この2列はPythonで計算した値', 8)
+header(ws, 4, ['項目', '', '人数', '相関係数', '年の影響を\n除いた相関', '偶然の可能性\n（そのまま）', '偶然の可能性\n（年の影響除去後）', '判定'],
+       [26, 2, 6, 9, 11, 12, 14, 26])
+L = "'選手一覧'"
+rk = COL_OF['rank']
+r = 5
+for key, lab in CORR_ITEMS:
+    k = PEOPLE_SEC.get(key, key)
+    vals = [p for p in PEOPLE if p.get(k) is not None]
+    raw = stt.correlation([p[k] for p in vals], [p['rank'] for p in vals])
+    adj, n, ny = year_adjusted_r(k)
+    p_raw, p_adj = pval(raw, n), pval(adj, n - ny + 1)
+    best = min(p_raw, p_adj)
+    verdict = ('関係あり（5%未満）' if best < 0.05 else '関係ありそう（5〜10%）' if best < 0.10
+               else '関係は弱い・なし')
+    col = COL_OF['sec' if key == 'sec' else key]
+    put(ws, r, 1, lab, align=LEFT)
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+    put(ws, r, 3, f'=SUMPRODUCT(({L}!${col}$6:${col}${LIST_LAST}<>"")*({L}!${rk}$6:${rk}${LIST_LAST}<>""))', '0')
+    put(ws, r, 4, f'=CORREL({L}!${col}$6:${col}${LIST_LAST},{L}!${rk}$6:${rk}${LIST_LAST})', '+0.00;-0.00;0.00')
+    put(ws, r, 5, round(adj, 3), '+0.00;-0.00;0.00')
+    put(ws, r, 6, round(p_raw, 4), '0.0%')
+    put(ws, r, 7, round(p_adj, 4), '0.0%')
+    put(ws, r, 8, verdict, align=LEFT)
+    if best < 0.10:
+        for j in range(1, 9):
+            ws.cell(r, j).fill = PatternFill('solid', fgColor='FFEB9C' if best < 0.05 else 'FFF2CC')
+    r += 1
+ws.cell(r + 1, 1, '※人数が少なく多くの項目を同時に調べているため、偶然5%を下回る項目が出ることもある。悪化率は出雲のタイムから計算しているので区間順位と関係が出やすい').font = Font(name=FONT, size=9, color='000000')
+ws.cell(r + 2, 1, '※5000mの組内順位は組ごとに出場選手の強さが違う。2026年はロード5kmで他の年とレースの性格が異なる').font = Font(name=FONT, size=9, color='000000')
+ws.freeze_panes = 'C5'
+
 # ---------------- 概要 ----------------
 ws = wb.create_sheet('概要', 0)
 ws.column_dimensions['A'].width = 24
@@ -464,7 +767,11 @@ sheets = [
     ('合宿距離×区間順位', '1次・2次合宿の距離と区間順位・日本人トップとの差・悪化率を1表に。年平均、相関係数、区間3位以内との比較つき'),
     ('合宿消化率', '出雲メンバーの1〜3次合宿の消化率（2023〜2026年）'),
     ('月間走行距離', '出雲メンバーの月間走行距離（2022・2023年通年、2024年1〜6月）'),
+    ('合宿距離_上位35人', '1次・2次合宿の1日あたり走行距離の上位35人（このシートのみ出雲メンバー以外も含む）'),
+    ('チーム平均推移', '夏合宿・月間のチーム平均走行距離の推移と、上位35人・出雲メンバーとの比較'),
+    ('区間順位との相関', '区間順位と各項目（5000m、悪化率、合宿距離、消化率、月間距離）の相関一覧'),
     ('合宿メニュー_2023〜2026', '1〜3次合宿のポイント練習と、出雲メンバー6人の組・消化率'),
+    ('選手一覧', '出雲出走選手30人（2022〜2026年）の情報を1行1人で集約した一覧表'),
 ]
 for n, d in sheets:
     r += 1
@@ -477,7 +784,7 @@ terms = [
     ('日本人トップ', '留学生を除いた区間最速の選手（区間賞が留学生だったのは5年とも3区のみ）'),
     ('悪化率', '出雲の5km換算ペース÷2週間前5000m記録−1。大きいほど本番で落ちている'),
     ('チーム比', '出雲メンバー6人の1次合宿距離の平均÷チーム全体の平均'),
-    ('対象', '出雲駅伝に出走した青学の選手（各年6人）のみ。比較用に日本人トップの区間記録と、1次合宿のチーム平均距離（年別まとめ）だけは参考値として掲載'),
+    ('対象', '出雲駅伝に出走した青学の選手（各年6人）のみ。比較用に日本人トップの区間記録、チーム平均距離、「合宿距離_上位35人」シートだけは他の部員も含む'),
     ('色の意味', '緑〜赤の背景色は良い〜悪い。区間賞は黄色の背景'),
 ]
 for n, d in terms:
@@ -505,6 +812,12 @@ for d in ['2023〜2025年の5000m記録会の日付', '3次合宿終了から出
     put(ws, r, 1, '・', align=CENTER)
     put(ws, r, 2, d, align=LEFT)
 
+ORDER = ['概要', '年別まとめ', '出雲区間記録', '5000m比較', '合宿走行距離', '合宿距離×区間順位', '合宿距離_上位35人',
+         'チーム平均推移', '合宿消化率', '月間走行距離', '区間順位との相関',
+         '合宿メニュー_2023', '合宿メニュー_2024', '合宿メニュー_2025', '合宿メニュー_2026', '選手一覧']
+assert sorted(ORDER) == sorted(s.title for s in wb.worksheets)
+wb._sheets = [wb[t] for t in ORDER]
+wb.active = 0
 for s in wb.worksheets:
     s.sheet_view.showGridLines = False
     s.sheet_properties.tabColor = GREEN if s.title in ('概要', '年別まとめ') else '7FA99B'
