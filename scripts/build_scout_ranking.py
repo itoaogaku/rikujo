@@ -3,6 +3,7 @@
 駅伝の区間成績（RACESのCSV）も、ランキングに載っている選手（＝2028年入学世代）だけ照合して追記する
 usage: python3 scripts/build_scout_ranking.py data/ranking_2028.xlsx output/2028入学世代_スカウト一覧.xlsx"""
 import csv, re, sys, unicodedata
+from bisect import bisect_left
 from collections import defaultdict
 from openpyxl import Workbook, load_workbook
 from openpyxl.formatting.rule import FormulaRule
@@ -26,7 +27,11 @@ TOP100 = PatternFill('solid', fgColor='E2EFDA')
 
 EVENTS = ['5000m', '3000mSC', '1500m']
 # 同一人物で表記が違うもの（同じ高校・同じ種目に二重掲載されているもの含む）
-NAME_ALIAS = {'ポールンジョロゲ': 'ポールジョロゲ', 'PAREIYOANTONYITA': 'パレイヨアントニーイタ'}
+NAME_ALIAS = {'ポールンジョロゲ': 'ポールジョロゲ', 'PAREIYOANTONYITA': 'パレイヨアントニーイタ',
+              # 外字が化けたもの・欠けたもの（いずれも同じ高校）
+              '??光寺奏': '座光寺奏', '??村悠希': '吉村悠希', '譲次郎': '高柳譲次郎', '柳譲次郎': '高柳譲次郎'}
+# 陸マガ5000mランキングの新しい版（サイトからコピーしたテキスト。高校名なし）。速い記録だけ上書きする
+R5000_UPDATE = 'data/ranking5000_20261018.txt'
 # 同名で高校が違っても同一人物とみなす下限（校名の文字の重なり率）
 SAME_SCHOOL = 0.6
 # 駅伝：(シート名, 区間成績CSV, 大会名)。CSVは scripts/extract_nihonkai.py・extract_okukuma.py で作る
@@ -131,12 +136,42 @@ for ev, rk, name, school, t in entries:
         athletes.append(a)
     if school not in a['schools']:
         a['schools'].append(school)
-    if re.fullmatch(r'[゠-ヿ　\s]+', name) and not re.search(r'[゠-ヿ]', a['name']):
-        a['name'] = name  # ローマ字表記よりカタカナ表記を優先
+    raw = lambda n: re.sub(r'\s', '', unicodedata.normalize('NFKC', n)).translate(KANJI)
+    if raw(name) == k and raw(a['name']) != k:
+        a['name'] = name  # 化けた・欠けた・ローマ字の表記より、NAME_ALIASの正しい表記を優先
     if ev in a['ev'] and rk > a['ev'][ev][0]:
         continue  # 同一人物の二重掲載は上位の記録を採用
     a['ev'][ev] = (rk, t)
     a['src'][ev] = (name, school)  # 種目別シートに出す元データの表記
+# ---------------- 5000mの新しいランキングで、速くなった記録を更新 ----------------
+txt = open(R5000_UPDATE, encoding='utf-8').read()
+newest = {}  # key -> (name, time, date)  同じ名前が複数あれば最も速い記録
+for rk, t, name, _, date in re.findall(r'(?m)^(\d+)\t(\d+\.\d\d\.\d\d)\t(.*?)\s*(\d)\t(\d\d/\d\d/\d\d)', txt, re.S):
+    name = name.replace('\n', '')
+    if key(name) not in newest or tval(t) < tval(newest[key(name)][1]):
+        newest[key(name)] = (name, t, date)
+for k, (name, t, date) in newest.items():
+    group = by_key.get(k, [])
+    with5 = [a for a in group if '5000m' in a['ev']]
+    if len(group) > 1 and len(with5) != 1:
+        continue  # 同名が複数いてどの選手か決められない
+    if not group:  # 旧ランキングにいない選手（高校名は不明）
+        a = {'name': name, 'schools': [''], 'ev': {}, 'src': {}, 'notes': ['高校名不明（5000m新ランキングのみ）']}
+        by_key[k].append(a)
+        athletes.append(a)
+        group = [a]
+    a = (with5 or group)[0]
+    old = a['ev'].get('5000m')
+    if old is None or tval(t) < tval(old[1]):
+        a['ev']['5000m'] = (None, t)
+        a['src']['5000m'] = (name, a['schools'][0])
+        a['notes'].append(f'5000m更新：{t}（20{date}）' + (f'←{old[1]}' if old else ''))
+# 5000mの順位は記録順に振り直す（同タイムは同順位）
+times = sorted(tval(a['ev']['5000m'][1]) for a in athletes if '5000m' in a['ev'])
+for a in athletes:
+    if '5000m' in a['ev']:
+        a['ev']['5000m'] = (bisect_left(times, tval(a['ev']['5000m'][1]) - 1e-9) + 1, a['ev']['5000m'][1])
+
 for k, group in by_key.items():
     if len(group) > 1:
         for a in group:
@@ -189,7 +224,8 @@ wb = Workbook()
 ws = wb.active
 ws.title = '選手一覧'
 title(ws, '2028年入学世代（現高校2年）中長距離 選手一覧（5000m順）',
-      '陸マガの5000m・3000mSC・1500mランキングを選手ごとに1行にまとめたもの。並び順＝5000mの順位（5000mの記録がない選手は'
+      '陸マガの5000m・3000mSC・1500mランキングを選手ごとに1行にまとめたもの。5000mは10/18時点のランキングで速い記録に更新し、'
+      '順位は記録順に振り直し。並び順＝5000mの順位（5000mの記録がない選手は'
       'その後ろに他種目の最高順位順）。順位の色：濃い緑＝10位以内、緑＝50位以内、薄緑＝100位以内。'
       '見出しのフィルターで高校名・駅伝出場などを絞り込めます。オレンジ＝注目選手（「注目選手」シートに一覧）。'
       'メモ列（黄色）は自由に記入してください。')
