@@ -5,7 +5,7 @@ usage: python3 scripts/build_scout_ranking.py data/ranking_2028.xlsx output/2028
 import csv, re, sys, unicodedata
 from collections import defaultdict
 from openpyxl import Workbook, load_workbook
-from openpyxl.formatting.rule import CellIsRule
+from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import column_index_from_string as col_idx, get_column_letter
 
@@ -99,10 +99,13 @@ def title(ws, text, sub):
     ws['A2'].font = Font(name=FONT, size=9, color='000000')
 
 
-def rank_colors(ws, ref):
-    for op, val, fill in [('<=', 10, TOP10), ('<=', 50, TOP50), ('<=', 100, TOP100)]:
-        ws.conditional_formatting.add(ref, CellIsRule(operator='lessThanOrEqual', formula=[str(val)], fill=fill,
-                                                      stopIfTrue=True))
+def rank_colors(ws, ref, steps=((10, TOP10), (50, TOP50), (100, TOP100))):
+    """順位セルの色分け。空欄（記録なし）は0扱いで色が付くので、数値のセルだけに限る"""
+    for rg in ref.split():
+        top = rg.split(':')[0]
+        for val, fill in steps:
+            ws.conditional_formatting.add(rg, FormulaRule(formula=[f'AND(ISNUMBER({top}),{top}<={val})'], fill=fill,
+                                                          stopIfTrue=True))
 
 
 # ---------------- 読み込み ----------------
@@ -322,9 +325,7 @@ for pos, (sheet, label, runs) in enumerate(races, 3):
         put(ws, r, 11, x['no'], '0')
         other_events(ws, r, 12, 'K')
         r += 1
-    for val, fill in [(3, TOP10), (10, TOP50), (30, TOP100)]:
-        ws.conditional_formatting.add(f'C5:C{E}', CellIsRule(operator='lessThanOrEqual', formula=[str(val)],
-                                                             fill=fill, stopIfTrue=True))
+    rank_colors(ws, f'C5:C{E}', ((3, TOP10), (10, TOP50), (30, TOP100)))
     rank_colors(ws, f'M5:M{E} O5:O{E} Q5:Q{E}')
     prev, on = None, False
     for rr in range(5, E + 1):  # 区が変わるごとに薄い帯色
