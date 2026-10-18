@@ -1,13 +1,13 @@
 """陸マガの高校ランキング（data/ranking_2028.xlsx：5000m・3000mSC・1500mが横並びの1シート）から
-選手単位にまとめたスカウト用Excelを作る。日本海駅伝（data/nihonkai_2026.csv）の区間成績も、
-ランキングに載っている選手（＝2028年入学世代）だけ照合して追記する
+選手単位にまとめたスカウト用Excelを作る。5000mを主に、並び順・集計は5000mの順位を基準にする。
+駅伝の区間成績（RACESのCSV）も、ランキングに載っている選手（＝2028年入学世代）だけ照合して追記する
 usage: python3 scripts/build_scout_ranking.py data/ranking_2028.xlsx output/2028入学世代_スカウト一覧.xlsx"""
 import csv, re, sys, unicodedata
 from collections import defaultdict
 from openpyxl import Workbook, load_workbook
-from openpyxl.formatting.rule import CellIsRule, FormulaRule
+from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string as col_idx, get_column_letter
 
 FONT = 'HGPｺﾞｼｯｸM'
 thin = Side(style='thin', color='BFBFBF')
@@ -29,12 +29,17 @@ EVENTS = ['5000m', '3000mSC', '1500m']
 NAME_ALIAS = {'ポールンジョロゲ': 'ポールジョロゲ', 'PAREIYOANTONYITA': 'パレイヨアントニーイタ'}
 # 同名で高校が違っても同一人物とみなす下限（校名の文字の重なり率）
 SAME_SCHOOL = 0.6
-EKIDEN = 'data/nihonkai_2026.csv'
-EKIDEN_NAME = '日本海駅伝（2026/10/4）'
+# 駅伝：(シート名, 区間成績CSV, 大会名)。CSVは scripts/extract_nihonkai.py・extract_okukuma.py で作る
+RACES = [('日本海駅伝', 'data/nihonkai_2026.csv', '第46回 日本海駅伝（2026/10/4）'),
+         ('奥球磨駅伝', 'data/okukuma_2026.csv', '第5回 奥球磨駅伝 高校の部（2026/10/4）')]
+# 旧字体など（陸マガのランキングは使っていない字）を揃える
+KANJI = str.maketrans('﨑髙濵澤邊邉', '崎高浜沢辺辺')
+MAIN_FILL = PatternFill('solid', fgColor='548235')
+MAIN_HEAD = Font(name=FONT, bold=True, color='FFFFFF', size=10)
 
 
 def key(name):
-    k = re.sub(r'\s', '', unicodedata.normalize('NFKC', name))
+    k = re.sub(r'\s', '', unicodedata.normalize('NFKC', name)).translate(KANJI)
     return NAME_ALIAS.get(k, k)
 
 
@@ -70,6 +75,18 @@ def header(ws, r, labels, widths):
         c.font, c.fill, c.alignment, c.border = HEAD_FONT, HEAD_FILL, CENTER, BORDER
         ws.column_dimensions[get_column_letter(j)].width = widths[j - 1]
     ws.row_dimensions[r].height = 14 * max(l.count('\n') + 1 for l in labels) + 6
+
+
+def team_schools(team):
+    """駅伝のチーム名（例：佐久長聖A、鹿児島実業高校B、小林・延岡工業高校合同）を校名の候補に"""
+    team = re.sub(r'(合同|[A-ZＡ-Ｚ])$', '', team)
+    return [re.sub(r'(高校|高)$', '', t) + '高' for t in team.split('・')]
+
+
+def time_val(s):
+    """'h:mm:ss' を日数に"""
+    h, m, sec = map(int, s.split(':'))
+    return (h * 3600 + m * 60 + sec) / 86400
 
 
 def title(ws, text, sub):
@@ -130,27 +147,35 @@ for a in athletes:
     if hand:
         a['notes'].append('手動計時：' + '・'.join(hand))
     a['best'] = min(r for r, _ in a['ev'].values())
-athletes.sort(key=lambda a: (a['best'], -len(a['ev']), sum(r for r, _ in a['ev'].values())))
+    a['r5000'] = a['ev'].get('5000m', (None,))[0]
+# 並び順：5000mの順位。5000mの記録がない選手はその後ろに、他種目の最高順位順
+athletes.sort(key=lambda a: (a['r5000'] is None, a['r5000'] or a['best'], -len(a['ev'])))
+NO = {id(a): i for i, a in enumerate(athletes, 1)}
 
-# ---------------- 日本海駅伝：名前が同じで、チーム名と校名が似ている選手だけ照合 ----------------
-ekiden = []
-for x in csv.DictReader(open(EKIDEN, encoding='utf-8')):
-    team = re.sub(r'[A-ZＡ-Ｚ]$', '', x['team']) + '高'
-    a = next((a for a in by_key.get(key(x['name']), []) if any(similar(team, s) for s in a['schools'])), None)
-    if a:
-        x['no'] = athletes.index(a) + 1
-        a['ekiden'] = f"{x['section']}区 {x['rank']}位（{x['time'].lstrip('0:')}）"
-        ekiden.append(x)
-ekiden.sort(key=lambda x: (int(x['section']), int(x['rank'])))
+# ---------------- 駅伝：名前が同じで、チーム名と校名が似ている選手だけ照合 ----------------
+races = []
+for sheet, path, label in RACES:
+    runs = []
+    for x in csv.DictReader(open(path, encoding='utf-8')):
+        a = next((a for a in by_key.get(key(x['name']), [])
+                  if any(similar(t, s) for t in team_schools(x['team']) for s in a['schools'])), None)
+        if a:
+            x['no'] = NO[id(a)]
+            a.setdefault('races', {})[sheet] = f"{x['section']}区 {x['rank']}位（{x['time'].lstrip('0:')}）"
+            runs.append(x)
+    runs.sort(key=lambda x: (int(x['section']), int(x['rank'])))
+    races.append((sheet, label, runs))
+
 
 wb = Workbook()
 
 # ---------------- 選手一覧 ----------------
 ws = wb.active
 ws.title = '選手一覧'
-title(ws, '2028年入学世代（現高校2年）中長距離 選手一覧',
-      '陸マガの5000m・3000mSC・1500mランキングを選手ごとに1行にまとめたもの。並び順＝3種目の中での最高順位。'
-      '順位の色：濃い緑＝10位以内、緑＝50位以内、薄緑＝100位以内。見出しのフィルターで高校名・種目数などを絞り込めます。')
+title(ws, '2028年入学世代（現高校2年）中長距離 選手一覧（5000m順）',
+      '陸マガの5000m・3000mSC・1500mランキングを選手ごとに1行にまとめたもの。並び順＝5000mの順位（5000mの記録がない選手は'
+      'その後ろに他種目の最高順位順）。順位の色：濃い緑＝10位以内、緑＝50位以内、薄緑＝100位以内。'
+      '見出しのフィルターで高校名・駅伝出場などを絞り込めます。')
 ws['A3'] = '基準記録（黄色セルを編集）→'
 ws['A3'].font = BOLD
 TH = {}
@@ -160,66 +185,57 @@ for j, (ev, mn, sc) in enumerate([('5000m', 14, 30), ('3000mSC', 9, 20), ('1500m
     put(ws, 3, c0 + 1, mn, '0"分"').fill = INPUT_FILL
     put(ws, 3, c0 + 2, sc, '0.00"秒"').fill = INPUT_FILL
     TH[ev] = f'(${get_column_letter(c0 + 1)}$3*60+${get_column_letter(c0 + 2)}$3)/86400'
-ws['A4'] = '基準記録の初期値は仮の値です。「基準クリア」列はその記録以内の種目数を数えます。メモ列（黄色）は自由に記入してください。'
+ws['A4'] = ('基準記録の初期値は仮の値です。「5000m基準」列は5000mが基準以内なら○、「基準クリア」列は3種目のうち基準以内の種目数。'
+            'メモ列（黄色）は自由に記入してください。')
 ws['A4'].font = Font(name=FONT, size=9, color='000000')
 
-H = ['No', '氏名', '高校', '5000m\n記録', '5000m\n順位', '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位',
-     'ランク入り\n種目数', '最高\n順位', '最高順位\nの種目', '基準\nクリア', '日本海駅伝\n（区・区間順位）', '備考', 'メモ']
+H = ['No', '氏名', '高校', '5000m\n記録', '5000m\n順位', '5000m\nトップ差(秒)', '5000m\n基準',
+     '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位', 'ランク入り\n種目数', '基準\nクリア']
+H += [f'{sheet}\n（区・区間順位）' for sheet, _, _ in races] + ['備考', 'メモ']
 HR = 6
-header(ws, HR, H, [6, 18, 20, 10, 7, 10, 7, 10, 7, 9, 7, 9, 7, 18, 40, 30])
+header(ws, HR, H, [6, 18, 20, 11, 8, 10, 7, 10, 8, 10, 8, 9, 7] + [18] * len(races) + [40, 30])
+for c in range(4, 8):
+    ws.cell(HR, c).fill, ws.cell(HR, c).font = MAIN_FILL, MAIN_HEAD
+C = {'5000m': ('D', 'E'), '3000mSC': ('H', 'I'), '1500m': ('J', 'K')}
+NOTE = 14 + len(races)
 r = HR + 1
-for no, a in enumerate(athletes, 1):
-    put(ws, r, 1, no)
-    put(ws, r, 2, a['name'], align=LEFT)
+for a in athletes:
+    put(ws, r, 1, NO[id(a)])
+    put(ws, r, 2, a['name'], align=LEFT, font=BOLD if a['r5000'] else BASE)
     put(ws, r, 3, a['school'], align=LEFT)
-    for j, ev in enumerate(EVENTS):
+    for ev, (tc, rc) in C.items():
         rk, t = a['ev'].get(ev, (None, None))
-        put(ws, r, 4 + j * 2, tval(t) if t else None, TFMT)
-        put(ws, r, 5 + j * 2, rk, '0')
-    put(ws, r, 10, f'=COUNT(E{r},G{r},I{r})', '0')
-    put(ws, r, 11, f'=MIN(E{r},G{r},I{r})', '0', BOLD)
-    put(ws, r, 12, f'=IF(E{r}=K{r},"5000m",IF(G{r}=K{r},"3000mSC","1500m"))')
-    put(ws, r, 13, f'=(D{r}<>"")*(D{r}<={TH["5000m"]})+(F{r}<>"")*(F{r}<={TH["3000mSC"]})'
-                   f'+(H{r}<>"")*(H{r}<={TH["1500m"]})', '0;;""')
-    put(ws, r, 14, a.get('ekiden'), align=LEFT)
-    put(ws, r, 15, '／'.join(a['notes']) or None, align=LEFT)
-    put(ws, r, 16, None, align=LEFT).fill = INPUT_FILL
+        f = BOLD if ev == '5000m' else BASE
+        put(ws, r, col_idx(tc), tval(t) if t else None, TFMT, f)
+        put(ws, r, col_idx(rc), rk, '0', f)
+    put(ws, r, 6, f'=IF(D{r}="","",ROUND((D{r}-MIN($D${HR + 1}:$D$9999))*86400,2))', '+0.00;-0.00;0')
+    put(ws, r, 7, f'=IF(D{r}="","",IF(D{r}<={TH["5000m"]},"○",""))')
+    put(ws, r, 12, f'=COUNT(E{r},I{r},K{r})', '0')
+    put(ws, r, 13, f'=(D{r}<>"")*(D{r}<={TH["5000m"]})+(H{r}<>"")*(H{r}<={TH["3000mSC"]})'
+                   f'+(J{r}<>"")*(J{r}<={TH["1500m"]})', '0;;""')
+    for j, (sheet, _, _) in enumerate(races):
+        put(ws, r, 14 + j, a.get('races', {}).get(sheet), align=LEFT)
+    put(ws, r, NOTE, '／'.join(a['notes']) or None, align=LEFT)
+    put(ws, r, NOTE + 1, None, align=LEFT).fill = INPUT_FILL
     r += 1
 LAST = r - 1
-rank_colors(ws, f'E{HR + 1}:E{LAST} G{HR + 1}:G{LAST} I{HR + 1}:I{LAST} K{HR + 1}:K{LAST}')
-ws.conditional_formatting.add(f'M{HR + 1}:M{LAST}', CellIsRule(operator='greaterThanOrEqual', formula=['1'],
+rank_colors(ws, f'E{HR + 1}:E{LAST} I{HR + 1}:I{LAST} K{HR + 1}:K{LAST}')
+ws.conditional_formatting.add(f'G{HR + 1}:G{LAST}', CellIsRule(operator='equal', formula=['"○"'],
                                                                 fill=PatternFill('solid', fgColor='FFEB9C')))
 ws.freeze_panes = ws.cell(HR + 1, 4)
-ws.auto_filter.ref = f'A{HR}:P{LAST}'
+ws.auto_filter.ref = f'A{HR}:{get_column_letter(NOTE + 1)}{LAST}'
 L = f"'選手一覧'!"
-
-# ---------------- 高校別 ----------------
-ws = wb.create_sheet('高校別')
-title(ws, '高校別：ランク入り選手の人数（スカウト訪問先の検討用）',
-      '人数は「選手一覧」から数式で集計。並び順＝100位以内の人数→ランク入り人数。選手名はいずれかの種目で100位以内の選手（最高順位）。')
-by_school = defaultdict(list)
-for a in athletes:
-    by_school[a['school']].append(a)
-schools = sorted(by_school, key=lambda s: (-sum(a['best'] <= 100 for a in by_school[s]), -len(by_school[s]),
-                                           min(a['best'] for a in by_school[s])))
-H = ['高校', 'ランク入り\n人数', 'いずれか\n100位以内', '5000m\n100位以内', '3000mSC\n100位以内', '1500m\n100位以内',
-     '最上位\n順位', '100位以内の選手（最高順位）']
-header(ws, 4, H, [22, 9, 9, 9, 9, 9, 7, 80])
-SR = 5
 rng = lambda col: f'{L}${col}${HR + 1}:${col}${LAST}'
-for r, s in enumerate(schools, SR):
-    put(ws, r, 1, s, align=LEFT)
-    put(ws, r, 2, f'=COUNTIF({rng("C")},A{r})', '0')
-    put(ws, r, 3, f'=COUNTIFS({rng("C")},A{r},{rng("K")},"<=100")', '0;;""')
-    for j, col in enumerate('EGI'):
-        put(ws, r, 4 + j, f'=COUNTIFS({rng("C")},A{r},{rng(col)},"<=100")', '0;;""')
-    put(ws, r, 7, f'=_xlfn.MINIFS({rng("K")},{rng("C")},A{r})', '0', BOLD)
-    top = [f'{a["name"].replace("　", "")}({a["best"]})' for a in by_school[s] if a['best'] <= 100]
-    put(ws, r, 8, '、'.join(top) or None, align=LEFT)
-SLAST = SR + len(schools) - 1
-rank_colors(ws, f'G{SR}:G{SLAST}')
-ws.freeze_panes = 'B5'
-ws.auto_filter.ref = f'A4:H{SLAST}'
+
+
+def other_events(ws, r, c, no_col):
+    """選手一覧のNoから5000m・3000mSC・1500mの記録と順位を参照する列を c 列目から書く"""
+    for j, ev in enumerate(EVENTS):
+        tc, rc = C[ev]
+        f = BOLD if ev == '5000m' else BASE
+        put(ws, r, c + j * 2, f'=IF(INDEX({rng(tc)},${no_col}{r})="","",INDEX({rng(tc)},${no_col}{r}))', TFMT, f)
+        put(ws, r, c + j * 2 + 1, f'=IF(INDEX({rng(rc)},${no_col}{r})="","",INDEX({rng(rc)},${no_col}{r}))', '0', f)
+
 
 # ---------------- 種目別ランキング ----------------
 for ev in EVENTS:
@@ -227,23 +243,21 @@ for ev in EVENTS:
     rows = sorted((e for e in entries if e[0] == ev), key=lambda e: e[1])
     others = [o for o in EVENTS if o != ev]
     title(ws, f'{ev} ランキング（陸マガ掲載順）',
-          f'記録は元データのまま。トップ差・{others[0]}・{others[1]}は「選手一覧」から数式で参照（同一人物と判定できた場合のみ）。')
+          f'記録は元データのまま。{others[0]}・{others[1]}は「選手一覧」から数式で参照（同一人物と判定できた場合のみ）。')
     H = ['順位', '氏名', '高校', '記録', 'トップ差\n(秒)', 'No', f'{others[0]}\n記録', f'{others[0]}\n順位',
          f'{others[1]}\n記録', f'{others[1]}\n順位']
     header(ws, 4, H, [7, 18, 20, 10, 9, 6, 10, 8, 10, 8])
-    col = {'5000m': ('D', 'E'), '3000mSC': ('F', 'G'), '1500m': ('H', 'I')}
     r = 5
     for _, rk, name, school, t in rows:
         a = next(a for a in by_key[key(name)] if school in a['schools'])
-        no = athletes.index(a) + 1
         put(ws, r, 1, rk, '0')
         put(ws, r, 2, name, align=LEFT)
         put(ws, r, 3, school, align=LEFT)
         put(ws, r, 4, tval(t), TFMT)
         put(ws, r, 5, f'=ROUND((D{r}-$D$5)*86400,2)', '+0.00;-0.00;0')
-        put(ws, r, 6, no, '0')
+        put(ws, r, 6, NO[id(a)], '0')
         for j, o in enumerate(others):
-            tc, rc = col[o]
+            tc, rc = C[o]
             put(ws, r, 7 + j * 2, f'=IF(INDEX({rng(tc)},$F{r})="","",INDEX({rng(tc)},$F{r}))', TFMT)
             put(ws, r, 8 + j * 2, f'=IF(INDEX({rng(rc)},$F{r})="","",INDEX({rng(rc)},$F{r}))', '0')
         r += 1
@@ -251,49 +265,84 @@ for ev in EVENTS:
     ws.freeze_panes = 'D5'
     ws.auto_filter.ref = f'A4:J{r - 1}'
 
-# ---------------- 日本海駅伝 ----------------
-ws = wb.create_sheet('日本海駅伝', 2)
-title(ws, f'{EKIDEN_NAME}：2028年入学世代（現高2）の区間成績',
-      '総合成績PDFの全出走者のうち、陸マガランキングに名前と高校が一致する選手のみ掲載（PDFに学年の記載がないため）。'
-      'ランキング圏外の2年生は含まれません。区間順位は全学年での順位、2年生内順位はこの表の中での順位。'
-      '区間順位の色：濃い緑＝3位以内、緑＝10位以内、薄緑＝30位以内。')
-H = ['区', '距離\n(km)', '区間\n順位', '2年生内\n順位', '区間記録', '1km\nペース', '氏名', 'チーム', '都道府県',
-     'チーム\n総合順位', 'No', '5000m\n記録', '5000m\n順位', '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位']
-header(ws, 4, H, [5, 8, 7, 8, 10, 8, 18, 14, 9, 8, 6, 10, 7, 10, 7, 10, 7])
-r = 5
-for x in ekiden:
-    h, mi, se = map(int, x['time'].split(':'))
-    put(ws, r, 1, int(x['section']), '0"区"')
-    put(ws, r, 2, float(x['distance_km']), '0.0###')
-    put(ws, r, 3, int(x['rank']), '0', BOLD)
-    put(ws, r, 4, f'=COUNTIFS($A$5:$A${4 + len(ekiden)},A{r},$E$5:$E${4 + len(ekiden)},"<"&E{r})+1', '0')
-    put(ws, r, 5, (h * 3600 + mi * 60 + se) / 86400, '[m]:ss')
-    put(ws, r, 6, f'=E{r}/B{r}', '[m]:ss')
-    put(ws, r, 7, x['name'], align=LEFT)
-    put(ws, r, 8, x['team'], align=LEFT)
-    put(ws, r, 9, x['pref'])
-    put(ws, r, 10, int(x['team_rank']), '0')
-    put(ws, r, 11, x['no'], '0')
-    for j, (tc, rc) in enumerate([('D', 'E'), ('F', 'G'), ('H', 'I')]):
-        put(ws, r, 12 + j * 2, f'=IF(INDEX({rng(tc)},$K{r})="","",INDEX({rng(tc)},$K{r}))', TFMT)
-        put(ws, r, 13 + j * 2, f'=IF(INDEX({rng(rc)},$K{r})="","",INDEX({rng(rc)},$K{r}))', '0')
-    r += 1
-ELAST = r - 1
-for val, fill in [(3, TOP10), (10, TOP50), (30, TOP100)]:
-    ws.conditional_formatting.add(f'C5:C{ELAST}', CellIsRule(operator='lessThanOrEqual', formula=[str(val)],
+# ---------------- 高校別 ----------------
+ws = wb.create_sheet('高校別', 2)
+title(ws, '高校別：5000mランク入り選手の人数（スカウト訪問先の検討用）',
+      '人数は「選手一覧」から数式で集計。並び順＝5000m100位以内の人数→5000mランク入り人数→5000m最上位順位。'
+      '選手名は5000m100位以内の選手（5000m順位）。')
+by_school = defaultdict(list)
+for a in athletes:
+    by_school[a['school']].append(a)
+r5 = lambda s: [a['r5000'] for a in by_school[s] if a['r5000']]
+schools = sorted(by_school, key=lambda s: (-sum(x <= 100 for x in r5(s)), -len(r5(s)), min(r5(s) or [9999]),
+                                           -len(by_school[s])))
+H = ['高校', '5000m\n100位以内', '5000m\nランク入り', '5000m\n最上位', '5000m100位以内の選手（5000m順位）',
+     '3000mSC\n100位以内', '1500m\n100位以内', '全種目\nランク入り']
+header(ws, 4, H, [22, 9, 9, 8, 70, 9, 9, 9])
+for c in range(2, 6):
+    ws.cell(4, c).fill, ws.cell(4, c).font = MAIN_FILL, MAIN_HEAD
+SR = 5
+for r, s in enumerate(schools, SR):
+    put(ws, r, 1, s, align=LEFT)
+    put(ws, r, 2, f'=COUNTIFS({rng("C")},A{r},{rng("E")},"<=100")', '0;;""', BOLD)
+    put(ws, r, 3, f'=COUNTIFS({rng("C")},A{r},{rng("E")},">0")', '0;;""')
+    put(ws, r, 4, f'=IF(C{r}=0,"",_xlfn.MINIFS({rng("E")},{rng("C")},A{r}))', '0', BOLD)
+    top = [f'{a["name"].replace("　", "")}({a["r5000"]})' for a in by_school[s] if a['r5000'] and a['r5000'] <= 100]
+    put(ws, r, 5, '、'.join(top) or None, align=LEFT)
+    put(ws, r, 6, f'=COUNTIFS({rng("C")},A{r},{rng("I")},"<=100")', '0;;""')
+    put(ws, r, 7, f'=COUNTIFS({rng("C")},A{r},{rng("K")},"<=100")', '0;;""')
+    put(ws, r, 8, f'=COUNTIF({rng("C")},A{r})', '0')
+SLAST = SR + len(schools) - 1
+rank_colors(ws, f'D{SR}:D{SLAST}')
+ws.freeze_panes = 'B5'
+ws.auto_filter.ref = f'A4:H{SLAST}'
+
+# ---------------- 駅伝 ----------------
+for pos, (sheet, label, runs) in enumerate(races, 3):
+    ws = wb.create_sheet(sheet, pos)
+    title(ws, f'{label}：2028年入学世代（現高2）の区間成績',
+          '全出走者のうち、陸マガランキングに名前と高校が一致する選手のみ掲載（成績表に学年の記載がないため）。'
+          'ランキング圏外の2年生は含まれません。区間順位は全学年での順位、2年生内順位はこの表の中での順位。'
+          '区間順位の色：濃い緑＝3位以内、緑＝10位以内、薄緑＝30位以内。')
+    H = ['区', '距離\n(km)', '区間\n順位', '2年生内\n順位', '区間記録', '1km\nペース', '氏名', 'チーム', '都道府県',
+         'チーム\n総合順位', 'No', '5000m\n記録', '5000m\n順位', '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位']
+    header(ws, 4, H, [5, 8, 7, 8, 10, 8, 18, 20, 9, 8, 6, 11, 8, 10, 8, 10, 8])
+    for c in (12, 13):
+        ws.cell(4, c).fill, ws.cell(4, c).font = MAIN_FILL, MAIN_HEAD
+    E = 4 + len(runs)
+    r = 5
+    for x in runs:
+        put(ws, r, 1, int(x['section']), '0"区"')
+        put(ws, r, 2, float(x['distance_km']), '0.0###')
+        put(ws, r, 3, int(x['rank']), '0', BOLD)
+        put(ws, r, 4, f'=COUNTIFS($A$5:$A${E},A{r},$E$5:$E${E},"<"&E{r})+1', '0')
+        put(ws, r, 5, time_val(x['time']), '[m]:ss')
+        put(ws, r, 6, f'=E{r}/B{r}', '[m]:ss')
+        put(ws, r, 7, x['name'], align=LEFT)
+        put(ws, r, 8, x['team'], align=LEFT)
+        put(ws, r, 9, x['pref'] or None)
+        put(ws, r, 10, int(x['team_rank']), '0')
+        put(ws, r, 11, x['no'], '0')
+        other_events(ws, r, 12, 'K')
+        r += 1
+    for val, fill in [(3, TOP10), (10, TOP50), (30, TOP100)]:
+        ws.conditional_formatting.add(f'C5:C{E}', CellIsRule(operator='lessThanOrEqual', formula=[str(val)],
                                                              fill=fill, stopIfTrue=True))
-rank_colors(ws, f'M5:M{ELAST} O5:O{ELAST} Q5:Q{ELAST}')
-prev, on = None, False
-for rr in range(5, ELAST + 1):  # 区が変わるごとに薄い帯色
-    if ws.cell(rr, 1).value != prev:
-        on, prev = not on, ws.cell(rr, 1).value
-    if on:
-        for c in (1, 2, 4, 5, 6, 7, 8, 9, 10, 11):
-            ws.cell(rr, c).fill = PatternFill('solid', fgColor='F2F2F2')
-ws.freeze_panes = 'H5'
-ws.auto_filter.ref = f'A4:Q{ELAST}'
+    rank_colors(ws, f'M5:M{E} O5:O{E} Q5:Q{E}')
+    prev, on = None, False
+    for rr in range(5, E + 1):  # 区が変わるごとに薄い帯色
+        if ws.cell(rr, 1).value != prev:
+            on, prev = not on, ws.cell(rr, 1).value
+        if on:
+            for c in (1, 2, 4, 5, 6, 7, 8, 9, 10, 11):
+                ws.cell(rr, c).fill = PatternFill('solid', fgColor='F2F2F2')
+    if not any(x['pref'] for x in runs):
+        ws.column_dimensions['I'].hidden = True  # 都道府県の記載がない大会
+    ws.freeze_panes = 'H5'
+    ws.auto_filter.ref = f'A4:Q{E}'
 
 for ws in wb:
     ws.sheet_view.zoomScale = 90
 wb.save(sys.argv[2])
-print(len(entries), 'entries ->', len(athletes), 'athletes,', len(schools), 'schools,', len(ekiden), 'ekiden runners')
+print(len(entries), 'entries ->', len(athletes), 'athletes,', len(schools), 'schools,',
+      ', '.join(f'{s} {len(x)}' for s, _, x in races))
