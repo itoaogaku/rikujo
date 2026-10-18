@@ -34,6 +34,9 @@ RACES = [('日本海駅伝', 'data/nihonkai_2026.csv', '第46回 日本海駅伝
          ('奥球磨駅伝', 'data/okukuma_2026.csv', '第5回 奥球磨駅伝 高校の部（2026/10/4）')]
 # 旧字体など（陸マガのランキングは使っていない字）を揃える
 KANJI = str.maketrans('﨑髙濵澤邊邉', '崎高浜沢辺辺')
+# 注目選手（オレンジ）とメモ。返ってきたExcelから scripts/import_marks.py で取り込む
+MARKS = 'data/scout_marks_2028.csv'
+FOCUS_FILL = PatternFill('solid', fgColor='FFC000')
 MAIN_FILL = PatternFill('solid', fgColor='548235')
 MAIN_HEAD = Font(name=FONT, bold=True, color='FFFFFF', size=10)
 
@@ -127,10 +130,8 @@ for ev, rk, name, school, t in entries:
         a['schools'].append(school)
     if re.fullmatch(r'[゠-ヿ　\s]+', name) and not re.search(r'[゠-ヿ]', a['name']):
         a['name'] = name  # ローマ字表記よりカタカナ表記を優先
-    if ev in a['ev']:
-        a['notes'].append(f'{ev}は二重掲載（{a["ev"][ev][0]}位と{rk}位）→上位を採用')
-        if rk > a['ev'][ev][0]:
-            continue
+    if ev in a['ev'] and rk > a['ev'][ev][0]:
+        continue  # 同一人物の二重掲載は上位の記録を採用
     a['ev'][ev] = (rk, t)
     a['src'][ev] = (name, school)  # 種目別シートに出す元データの表記
 for k, group in by_key.items():
@@ -152,6 +153,17 @@ for a in athletes:
 # 並び順：5000mの順位。5000mの記録がない選手はその後ろに、他種目の最高順位順
 athletes.sort(key=lambda a: (a['r5000'] is None, a['r5000'] or a['best'], -len(a['ev'])))
 NO = {id(a): i for i, a in enumerate(athletes, 1)}
+for m in csv.DictReader(open(MARKS, encoding='utf-8')):
+    a = next(a for a in by_key[key(m['name'])] if any(similar(m['school'], s) for s in a['schools']))
+    a['focus'], a['memo'] = m['focus'] == '1', m['memo'] or None
+FOCUS = [a for a in athletes if a.get('focus')]
+
+
+def mark_row(ws, r, ncol, a):
+    """注目選手の行をオレンジにする"""
+    if a.get('focus'):
+        for c in range(1, ncol + 1):
+            ws.cell(r, c).fill = FOCUS_FILL
 
 # ---------------- 駅伝：名前が同じで、チーム名と校名が似ている選手だけ照合 ----------------
 races = []
@@ -176,7 +188,8 @@ ws.title = '選手一覧'
 title(ws, '2028年入学世代（現高校2年）中長距離 選手一覧（5000m順）',
       '陸マガの5000m・3000mSC・1500mランキングを選手ごとに1行にまとめたもの。並び順＝5000mの順位（5000mの記録がない選手は'
       'その後ろに他種目の最高順位順）。順位の色：濃い緑＝10位以内、緑＝50位以内、薄緑＝100位以内。'
-      '見出しのフィルターで高校名・駅伝出場などを絞り込めます。メモ列（黄色）は自由に記入してください。')
+      '見出しのフィルターで高校名・駅伝出場などを絞り込めます。オレンジ＝注目選手（「注目選手」シートに一覧）。'
+      'メモ列（黄色）は自由に記入してください。')
 H = ['No', '氏名', '高校', '5000m\n記録', '5000m\n順位', '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位']
 H += [f'{sheet}\n（区・区間順位）' for sheet, _, _ in races] + ['備考', 'メモ']
 HR = 4
@@ -198,7 +211,8 @@ for a in athletes:
     for j, (sheet, _, _) in enumerate(races):
         put(ws, r, 10 + j, a.get('races', {}).get(sheet), align=LEFT)
     put(ws, r, NOTE, '／'.join(a['notes']) or None, align=LEFT)
-    put(ws, r, NOTE + 1, None, align=LEFT).fill = INPUT_FILL
+    put(ws, r, NOTE + 1, a.get('memo'), align=LEFT).fill = INPUT_FILL
+    mark_row(ws, r, NOTE, a)
     r += 1
 LAST = r - 1
 rank_colors(ws, f'E{HR + 1}:E{LAST} G{HR + 1}:G{LAST} I{HR + 1}:I{LAST}')
@@ -242,6 +256,7 @@ for ev in EVENTS:
             tc, rc = C[o]
             put(ws, r, 7 + j * 2, f'=IF(INDEX({rng(tc)},$F{r})="","",INDEX({rng(tc)},$F{r}))', TFMT)
             put(ws, r, 8 + j * 2, f'=IF(INDEX({rng(rc)},$F{r})="","",INDEX({rng(rc)},$F{r}))', '0')
+        mark_row(ws, r, 10, a)
         r += 1
     rank_colors(ws, f'A5:A{r - 1} H5:H{r - 1} J5:J{r - 1}')
     ws.freeze_panes = 'D5'
@@ -318,10 +333,34 @@ for pos, (sheet, label, runs) in enumerate(races, 3):
         if on:
             for c in (1, 2, 4, 5, 6, 7, 8, 9, 10, 11):
                 ws.cell(rr, c).fill = PatternFill('solid', fgColor='F2F2F2')
+    for rr, x in enumerate(runs, 5):
+        mark_row(ws, rr, 17, athletes[x['no'] - 1])
     if not any(x['pref'] for x in runs):
         ws.column_dimensions['I'].hidden = True  # 都道府県の記載がない大会
     ws.freeze_panes = 'H5'
     ws.auto_filter.ref = f'A4:Q{E}'
+
+# ---------------- 注目選手 ----------------
+ws = wb.create_sheet('注目選手', 1)
+title(ws, f'注目選手（{len(FOCUS)}人・5000m順）',
+      '選手一覧でオレンジにした選手。記録・駅伝・メモは「選手一覧」から数式で参照（メモは選手一覧のメモ列に記入）。'
+      '注目選手を増減するときは、どのシートでも行をオレンジ（FFC000）にして返してください。')
+H = ['No', '氏名', '高校', '5000m\n記録', '5000m\n順位', '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位']
+H += [f'{sheet}\n（区・区間順位）' for sheet, _, _ in races] + ['備考', 'メモ']
+header(ws, 4, H, [6, 18, 20, 11, 8, 10, 8, 10, 8] + [18] * len(races) + [40, 30])
+for c in range(4, 6):
+    ws.cell(4, c).fill, ws.cell(4, c).font = MAIN_FILL, MAIN_HEAD
+for r, a in enumerate(FOCUS, 5):
+    put(ws, r, 1, NO[id(a)])
+    for c in range(2, NOTE + 2):
+        col = get_column_letter(c)
+        fmt = TFMT if col in 'DFH' else '0' if col in 'EGI' else None
+        put(ws, r, c, f'=IF(INDEX({rng(col)},$A{r})="","",INDEX({rng(col)},$A{r}))', fmt,
+            BOLD if col in 'BDE' else BASE, LEFT if c in (2, 3) or c >= 10 else CENTER)
+FLAST = 4 + len(FOCUS)
+rank_colors(ws, f'E5:E{FLAST} G5:G{FLAST} I5:I{FLAST}')
+ws.freeze_panes = 'D5'
+ws.auto_filter.ref = f'A4:{get_column_letter(NOTE + 1)}{FLAST}'
 
 for ws in wb:
     ws.sheet_view.zoomScale = 90
