@@ -120,7 +120,7 @@ for ev, rk, name, school, t in entries:
     k = key(name)
     a = next((a for a in by_key[k] if any(similar(school, s) for s in a['schools'])), None)
     if a is None:
-        a = {'name': name, 'schools': [], 'ev': {}, 'notes': []}
+        a = {'name': name, 'schools': [], 'ev': {}, 'src': {}, 'notes': []}
         by_key[k].append(a)
         athletes.append(a)
     if school not in a['schools']:
@@ -132,6 +132,7 @@ for ev, rk, name, school, t in entries:
         if rk > a['ev'][ev][0]:
             continue
     a['ev'][ev] = (rk, t)
+    a['src'][ev] = (name, school)  # 種目別シートに出す元データの表記
 for k, group in by_key.items():
     if len(group) > 1:
         for a in group:
@@ -175,29 +176,15 @@ ws.title = '選手一覧'
 title(ws, '2028年入学世代（現高校2年）中長距離 選手一覧（5000m順）',
       '陸マガの5000m・3000mSC・1500mランキングを選手ごとに1行にまとめたもの。並び順＝5000mの順位（5000mの記録がない選手は'
       'その後ろに他種目の最高順位順）。順位の色：濃い緑＝10位以内、緑＝50位以内、薄緑＝100位以内。'
-      '見出しのフィルターで高校名・駅伝出場などを絞り込めます。')
-ws['A3'] = '基準記録（黄色セルを編集）→'
-ws['A3'].font = BOLD
-TH = {}
-for j, (ev, mn, sc) in enumerate([('5000m', 14, 30), ('3000mSC', 9, 20), ('1500m', 3, 55)]):
-    c0 = 4 + j * 4
-    put(ws, 3, c0, ev, font=BOLD)
-    put(ws, 3, c0 + 1, mn, '0"分"').fill = INPUT_FILL
-    put(ws, 3, c0 + 2, sc, '0.00"秒"').fill = INPUT_FILL
-    TH[ev] = f'(${get_column_letter(c0 + 1)}$3*60+${get_column_letter(c0 + 2)}$3)/86400'
-ws['A4'] = ('基準記録の初期値は仮の値です。「5000m基準」列は5000mが基準以内なら○、「基準クリア」列は3種目のうち基準以内の種目数。'
-            'メモ列（黄色）は自由に記入してください。')
-ws['A4'].font = Font(name=FONT, size=9, color='000000')
-
-H = ['No', '氏名', '高校', '5000m\n記録', '5000m\n順位', '5000m\nトップ差(秒)', '5000m\n基準',
-     '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位', 'ランク入り\n種目数', '基準\nクリア']
+      '見出しのフィルターで高校名・駅伝出場などを絞り込めます。メモ列（黄色）は自由に記入してください。')
+H = ['No', '氏名', '高校', '5000m\n記録', '5000m\n順位', '3000mSC\n記録', '3000mSC\n順位', '1500m\n記録', '1500m\n順位']
 H += [f'{sheet}\n（区・区間順位）' for sheet, _, _ in races] + ['備考', 'メモ']
-HR = 6
-header(ws, HR, H, [6, 18, 20, 11, 8, 10, 7, 10, 8, 10, 8, 9, 7] + [18] * len(races) + [40, 30])
-for c in range(4, 8):
+HR = 4
+header(ws, HR, H, [6, 18, 20, 11, 8, 10, 8, 10, 8] + [18] * len(races) + [40, 30])
+for c in range(4, 6):
     ws.cell(HR, c).fill, ws.cell(HR, c).font = MAIN_FILL, MAIN_HEAD
-C = {'5000m': ('D', 'E'), '3000mSC': ('H', 'I'), '1500m': ('J', 'K')}
-NOTE = 14 + len(races)
+C = {'5000m': ('D', 'E'), '3000mSC': ('F', 'G'), '1500m': ('H', 'I')}
+NOTE = 10 + len(races)
 r = HR + 1
 for a in athletes:
     put(ws, r, 1, NO[id(a)])
@@ -208,20 +195,13 @@ for a in athletes:
         f = BOLD if ev == '5000m' else BASE
         put(ws, r, col_idx(tc), tval(t) if t else None, TFMT, f)
         put(ws, r, col_idx(rc), rk, '0', f)
-    put(ws, r, 6, f'=IF(D{r}="","",ROUND((D{r}-MIN($D${HR + 1}:$D$9999))*86400,2))', '+0.00;-0.00;0')
-    put(ws, r, 7, f'=IF(D{r}="","",IF(D{r}<={TH["5000m"]},"○",""))')
-    put(ws, r, 12, f'=COUNT(E{r},I{r},K{r})', '0')
-    put(ws, r, 13, f'=(D{r}<>"")*(D{r}<={TH["5000m"]})+(H{r}<>"")*(H{r}<={TH["3000mSC"]})'
-                   f'+(J{r}<>"")*(J{r}<={TH["1500m"]})', '0;;""')
     for j, (sheet, _, _) in enumerate(races):
-        put(ws, r, 14 + j, a.get('races', {}).get(sheet), align=LEFT)
+        put(ws, r, 10 + j, a.get('races', {}).get(sheet), align=LEFT)
     put(ws, r, NOTE, '／'.join(a['notes']) or None, align=LEFT)
     put(ws, r, NOTE + 1, None, align=LEFT).fill = INPUT_FILL
     r += 1
 LAST = r - 1
-rank_colors(ws, f'E{HR + 1}:E{LAST} I{HR + 1}:I{LAST} K{HR + 1}:K{LAST}')
-ws.conditional_formatting.add(f'G{HR + 1}:G{LAST}', CellIsRule(operator='equal', formula=['"○"'],
-                                                                fill=PatternFill('solid', fgColor='FFEB9C')))
+rank_colors(ws, f'E{HR + 1}:E{LAST} G{HR + 1}:G{LAST} I{HR + 1}:I{LAST}')
 ws.freeze_panes = ws.cell(HR + 1, 4)
 ws.auto_filter.ref = f'A{HR}:{get_column_letter(NOTE + 1)}{LAST}'
 L = f"'選手一覧'!"
@@ -240,16 +220,18 @@ def other_events(ws, r, c, no_col):
 # ---------------- 種目別ランキング ----------------
 for ev in EVENTS:
     ws = wb.create_sheet(ev)
-    rows = sorted((e for e in entries if e[0] == ev), key=lambda e: e[1])
+    # 同一人物が二重掲載されている場合は上位（速い方）の記録だけ残す
+    rows = sorted((a for a in athletes if ev in a['ev']), key=lambda a: a['ev'][ev][0])
     others = [o for o in EVENTS if o != ev]
     title(ws, f'{ev} ランキング（陸マガ掲載順）',
-          f'記録は元データのまま。{others[0]}・{others[1]}は「選手一覧」から数式で参照（同一人物と判定できた場合のみ）。')
+          f'記録・順位は元データのまま（同一人物の二重掲載は上位の記録のみ残したため、その順位は欠番）。'
+          f'{others[0]}・{others[1]}は「選手一覧」から数式で参照（同一人物と判定できた場合のみ）。')
     H = ['順位', '氏名', '高校', '記録', 'トップ差\n(秒)', 'No', f'{others[0]}\n記録', f'{others[0]}\n順位',
          f'{others[1]}\n記録', f'{others[1]}\n順位']
     header(ws, 4, H, [7, 18, 20, 10, 9, 6, 10, 8, 10, 8])
     r = 5
-    for _, rk, name, school, t in rows:
-        a = next(a for a in by_key[key(name)] if school in a['schools'])
+    for a in rows:
+        (rk, t), (name, school) = a['ev'][ev], a['src'][ev]
         put(ws, r, 1, rk, '0')
         put(ws, r, 2, name, align=LEFT)
         put(ws, r, 3, school, align=LEFT)
@@ -284,13 +266,13 @@ for c in range(2, 6):
 SR = 5
 for r, s in enumerate(schools, SR):
     put(ws, r, 1, s, align=LEFT)
-    put(ws, r, 2, f'=COUNTIFS({rng("C")},A{r},{rng("E")},"<=100")', '0;;""', BOLD)
-    put(ws, r, 3, f'=COUNTIFS({rng("C")},A{r},{rng("E")},">0")', '0;;""')
-    put(ws, r, 4, f'=IF(C{r}=0,"",_xlfn.MINIFS({rng("E")},{rng("C")},A{r}))', '0', BOLD)
+    put(ws, r, 2, f'=COUNTIFS({rng("C")},A{r},{rng(C["5000m"][1])},"<=100")', '0;;""', BOLD)
+    put(ws, r, 3, f'=COUNTIFS({rng("C")},A{r},{rng(C["5000m"][1])},">0")', '0;;""')
+    put(ws, r, 4, f'=IF(C{r}=0,"",_xlfn.MINIFS({rng(C["5000m"][1])},{rng("C")},A{r}))', '0', BOLD)
     top = [f'{a["name"].replace("　", "")}({a["r5000"]})' for a in by_school[s] if a['r5000'] and a['r5000'] <= 100]
     put(ws, r, 5, '、'.join(top) or None, align=LEFT)
-    put(ws, r, 6, f'=COUNTIFS({rng("C")},A{r},{rng("I")},"<=100")', '0;;""')
-    put(ws, r, 7, f'=COUNTIFS({rng("C")},A{r},{rng("K")},"<=100")', '0;;""')
+    put(ws, r, 6, f'=COUNTIFS({rng("C")},A{r},{rng(C["3000mSC"][1])},"<=100")', '0;;""')
+    put(ws, r, 7, f'=COUNTIFS({rng("C")},A{r},{rng(C["1500m"][1])},"<=100")', '0;;""')
     put(ws, r, 8, f'=COUNTIF({rng("C")},A{r})', '0')
 SLAST = SR + len(schools) - 1
 rank_colors(ws, f'D{SR}:D{SLAST}')
